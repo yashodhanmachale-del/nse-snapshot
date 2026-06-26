@@ -1,0 +1,9 @@
+smartapi-python
+pyotp
+gspread
+google-auth
+google-api-python-client
+openpyxl
+requests
+websocket-client
+logzero
