@@ -164,43 +164,57 @@ NIFTY50_TOKENS = {
     "ZOMATO":     ("ZOMATO-EQ",     "5097"),
 }
 
-def fetch_nifty50(obj):
-    print("\n📋 Fetching Nifty 50 stocks...")
-    stocks = []
-    for sym, (trading_sym, token) in NIFTY50_TOKENS.items():
-        for attempt in range(3):  # retry up to 3 times
-            try:
-                r = obj.ltpData("NSE", trading_sym, token)
-                if r.get("status") and r.get("data"):
-                    ltp   = float(r["data"].get("ltp",   0) or 0)
-                    close = float(r["data"].get("close", ltp) or ltp)
-                    chng  = round(ltp - close, 2)
-                    pct   = round((chng / close) * 100, 2) if close else 0.0
-                    stocks.append({"symbol": sym, "ltp": ltp, "chng": chng, "pChng": pct})
-                    print(f"  ✅ {sym}: {ltp}  {pct:+.2f}%")
-                else:
-                    msg = r.get("message","")
-                    if "rate" in msg.lower() and attempt < 2:
-                        print(f"  ⏳ {sym}: rate limit, waiting 3s...")
-                        time.sleep(3)
-                        continue
-                    print(f"  ⚠️  {sym}: {msg}")
-                    stocks.append({"symbol": sym, "ltp": None, "chng": None, "pChng": None})
-                break
-            except Exception as e:
-                err = str(e)
-                if "rate" in err.lower() and attempt < 2:
-                    print(f"  ⏳ {sym}: rate limit hit, waiting 5s (attempt {attempt+1})")
-                    time.sleep(5)
-                    continue
-                print(f"  ❌ {sym}: {e}")
-                stocks.append({"symbol": sym, "ltp": None, "chng": None, "pChng": None})
-                break
-        time.sleep(0.8)  # 0.8s between each stock = ~40s total, avoids rate limit
-
-    filled = sum(1 for s in stocks if s["ltp"] is not None)
-    print(f"\n  Result: {filled}/{len(stocks)} stocks with data")
-    return stocks
+NIFTY_WEIGHTS = {
+    "HDFCBANK": 13.4,
+    "ICICIBANK": 8.3,
+    "RELIANCE": 8.0,
+    "INFY": 6.2,
+    "TCS": 4.5,
+    "ITC": 4.2,
+    "LT": 4.0,
+    "BHARTIARTL": 3.9,
+    "SBIN": 3.5,
+    "AXISBANK": 3.0,
+    "KOTAKBANK": 2.8,
+    "M&M": 2.8,
+    "HINDUNILVR": 2.7,
+    "BAJFINANCE": 2.6,
+    "SUNPHARMA": 2.4,
+    "MARUTI": 2.2,
+    "NTPC": 2.1,
+    "ULTRACEMCO": 2.0,
+    "TITAN": 1.9,
+    "POWERGRID": 1.9,
+    "ONGC": 1.8,
+    "BAJAJFINSV": 1.8,
+    "ASIANPAINT": 1.7,
+    "TATASTEEL": 1.7,
+    "WIPRO": 1.6,
+    "TECHM": 1.5,
+    "JSWSTEEL": 1.5,
+    "HCLTECH": 1.5,
+    "ADANIPORTS": 1.5,
+    "COALINDIA": 1.4,
+    "HINDALCO": 1.4,
+    "TATACONSUM": 1.3,
+    "NESTLEIND": 1.3,
+    "BEL": 1.2,
+    "JIOFIN": 1.2,
+    "BAJAJ-AUTO": 1.1,
+    "ADANIENT": 1.1,
+    "DRREDDY": 1.1,
+    "CIPLA": 1.1,
+    "TRENT": 1.0,
+    "SBILIFE": 1.0,
+    "SHRIRAMFIN": 0.9,
+    "EICHERMOT": 0.9,
+    "HDFCLIFE": 0.9,
+    "GRASIM": 0.9,
+    "INDIGO": 0.8,
+    "APOLLOHOSP": 0.8,
+    "MAXHEALTH": 0.7,
+    "ETERNAL": 0.7
+}
 
 # ── Build Excel ──────────────────────────────────────────────
 def build_excel(label, ist_dt, indices, stocks):
@@ -274,8 +288,8 @@ def build_excel(label, ist_dt, indices, stocks):
             cell.fill=fill(bg); cell.border=brd(); cell.alignment=aln("center")
 
     valid = [s for s in stocks if s["pChng"] is not None]
-    top7p = sorted(valid, key=lambda x: x["pChng"], reverse=True)[:7]
-    top7n = sorted(valid, key=lambda x: x["pChng"])[:7]
+    top7p = sorted(valid, key=lambda x:x["contribution"], reverse=True)[:7]
+    top7n = sorted(valid, key=lambda x:x["contribution"])[:7]
     trow  = r + 4
 
     for top7, col, title, hbg, tc, b1, b2 in [
