@@ -1,6 +1,5 @@
 """
-snapshot_cloud.py  v4 — Fixed Angel One API calls
-Uses ltpData() which works correctly both during and outside market hours
+snapshot_cloud.py v5 — Maximum debug logging to find exact issue
 """
 
 import os, json, pyotp, gspread, traceback, smtplib, time
@@ -20,7 +19,6 @@ from email import encoders
 
 IST = ZoneInfo("Asia/Kolkata")
 
-# ── Credentials from GitHub Secrets ─────────────────────────
 def env(key):
     val = os.environ.get(key, "")
     if not val:
@@ -42,16 +40,15 @@ def get_creds():
     }
 
 def get_sa_creds(sa_json_str, scopes):
-    return Credentials.from_service_account_info(
-        json.loads(sa_json_str), scopes=scopes)
+    return Credentials.from_service_account_info(json.loads(sa_json_str), scopes=scopes)
 
-# ── Excel styles ─────────────────────────────────────────────
+# ── Styles ───────────────────────────────────────────────────
 C = {
-    "title_bg": "0D47A1", "hdr_mid":  "1976D2", "hdr_dark": "283593",
-    "pos_bg":   "E8F5E9", "pos_alt":  "F1F8E9", "pos_txt":  "1B5E20",
-    "neg_bg":   "FFEBEE", "neg_alt":  "FCE4EC", "neg_txt":  "B71C1C",
-    "idx_bg":   "E8EAF6", "idx_alt":  "FFFFFF",
-    "grn_hdr":  "2E7D32", "red_hdr":  "C62828", "white":    "FFFFFF",
+    "title_bg":"0D47A1","hdr_mid":"1976D2","hdr_dark":"283593",
+    "pos_bg":"E8F5E9","pos_alt":"F1F8E9","pos_txt":"1B5E20",
+    "neg_bg":"FFEBEE","neg_alt":"FCE4EC","neg_txt":"B71C1C",
+    "idx_bg":"E8EAF6","idx_alt":"FFFFFF",
+    "grn_hdr":"2E7D32","red_hdr":"C62828","white":"FFFFFF",
 }
 def fill(h): return PatternFill("solid", start_color=h, fgColor=h)
 def font(bold=False, color="000000", size=10):
@@ -67,98 +64,113 @@ def sc(cell, bg=None, fg="000000", bold=False, size=10, ha="left"):
     cell.alignment = aln(ha)
     cell.border = brd()
 
-# ── Angel One login ──────────────────────────────────────────
+# ── Angel One Login ──────────────────────────────────────────
 def angel_login(creds):
-    obj  = SmartConnect(api_key=creds["api_key"])
+    print(f"\n--- Angel One Login ---")
+    print(f"API Key  : {creds['api_key'][:6]}...")
+    print(f"Client ID: {creds['client_id']}")
     totp = pyotp.TOTP(creds["totp_secret"]).now()
+    print(f"TOTP     : {totp}")
+    obj  = SmartConnect(api_key=creds["api_key"])
     data = obj.generateSession(creds["client_id"], creds["password"], totp)
+    print(f"Login response status : {data.get('status')}")
+    print(f"Login response message: {data.get('message','')}")
     if data["status"] is False:
-        raise Exception("Angel One login failed: " + str(data.get("message","")))
-    print("✅ Angel One login successful")
+        raise Exception("Login failed: " + str(data.get("message","")))
+    print("✅ Login successful")
     return obj
 
-# ── Index tokens (NSE/BSE exchange + token) ──────────────────
+# ── Fetch Indices ────────────────────────────────────────────
 INDEX_TOKENS = {
-    "NIFTY 50":          ("NSE", "Nifty 50",           "99926000"),
-    "SENSEX":            ("BSE", "SENSEX",              "99919000"),
-    "BANK NIFTY":        ("NSE", "Nifty Bank",          "99926009"),
-    "NIFTY IT":          ("NSE", "Nifty IT",            "99926011"),
-    "NIFTY SMALLCAP 50": ("NSE", "Nifty Smallcap 50",  "99926074"),
-}
-
-# ── Nifty 50 stock tokens ────────────────────────────────────
-# Format: symbol → (exchange_token, trading_symbol)
-# Using hardcoded tokens to avoid searchScrip() which is slow & unreliable
-NIFTY50_TOKENS = {
-    "RELIANCE":   "2885",  "TCS":        "11536", "HDFCBANK":   "1333",
-    "INFY":       "1594",  "ICICIBANK":  "4963",  "HINDUNILVR": "1394",
-    "ITC":        "1660",  "KOTAKBANK":  "1922",  "LT":         "11483",
-    "SBIN":       "3045",  "AXISBANK":   "5900",  "BAJFINANCE": "317",
-    "BHARTIARTL": "10604", "M&M":        "2031",  "MARUTI":     "10999",
-    "NESTLEIND":  "17963", "NTPC":       "11630", "ONGC":       "2475",
-    "POWERGRID":  "14977", "SUNPHARMA":  "3351",  "TATAMOTORS": "3456",
-    "TATASTEEL":  "3499",  "TECHM":      "13538", "TITAN":      "3506",
-    "ULTRACEMCO": "11532", "WIPRO":      "3787",  "ADANIENT":   "25",
-    "ADANIPORTS": "15083", "APOLLOHOSP": "157",   "ASIANPAINT": "236",
-    "BAJAJFINSV": "16675", "BAJAJ-AUTO": "16669", "BEL":        "383",
-    "BPCL":       "526",   "BRITANNIA":  "547",   "CIPLA":      "694",
-    "COALINDIA":  "20374", "DIVISLAB":   "10940", "DRREDDY":    "881",
-    "EICHERMOT":  "910",   "GRASIM":     "1232",  "HCLTECH":    "7229",
-    "HEROMOTOCO": "1348",  "HINDALCO":   "1363",  "INDUSINDBK": "5258",
-    "JSWSTEEL":   "11723", "LTIM":       "17818", "SHRIRAMFIN": "4306",
-    "TATACONSUM": "3432",  "ZOMATO":     "5097",
+    "NIFTY 50":          ("NSE", "Nifty 50",          "99926000"),
+    "SENSEX":            ("BSE", "SENSEX",             "99919000"),
+    "BANK NIFTY":        ("NSE", "Nifty Bank",         "99926009"),
+    "NIFTY IT":          ("NSE", "Nifty IT",           "99926011"),
+    "NIFTY SMALLCAP 50": ("NSE", "Nifty Smallcap 50", "99926074"),
 }
 
 def fetch_indices(obj):
+    print(f"\n--- Fetching Indices ---")
     result = {}
-    for name, (exch, trading_sym, token) in INDEX_TOKENS.items():
+    for name, (exch, sym, token) in INDEX_TOKENS.items():
         try:
-            r   = obj.ltpData(exch, trading_sym, token)
-            if r["status"] and r.get("data"):
-                ltp   = float(r["data"].get("ltp", 0))
+            r = obj.ltpData(exch, sym, token)
+            print(f"  {name} raw response: {json.dumps(r)}")
+            if r.get("status") and r.get("data"):
+                ltp   = float(r["data"].get("ltp", 0) or 0)
                 close = float(r["data"].get("close", ltp) or ltp)
                 chng  = round(ltp - close, 2)
                 pct   = round((chng / close) * 100, 2) if close else 0.0
                 result[name] = {"ltp": ltp, "chng": chng, "pct": pct}
-                print(f"  ✅ {name}: LTP={ltp}  {pct:+.2f}%")
+                print(f"  ✅ {name}: ltp={ltp} close={close} chng={chng} pct={pct}")
             else:
-                print(f"  ⚠️  {name}: no data returned — {r.get('message','')}")
+                print(f"  ⚠️  {name}: status={r.get('status')} message={r.get('message','')}")
                 result[name] = {"ltp": None, "chng": None, "pct": None}
         except Exception as e:
-            print(f"  ⚠️  {name}: {e}")
+            print(f"  ❌ {name} exception: {e}")
+            traceback.print_exc()
             result[name] = {"ltp": None, "chng": None, "pct": None}
-        time.sleep(0.3)
+        time.sleep(0.5)
     return result
 
+# ── Nifty 50 tokens ──────────────────────────────────────────
+NIFTY50_TOKENS = {
+    "RELIANCE":"2885","TCS":"11536","HDFCBANK":"1333","INFY":"1594",
+    "ICICIBANK":"4963","HINDUNILVR":"1394","ITC":"1660","KOTAKBANK":"1922",
+    "LT":"11483","SBIN":"3045","AXISBANK":"5900","BAJFINANCE":"317",
+    "BHARTIARTL":"10604","M&M":"2031","MARUTI":"10999","NESTLEIND":"17963",
+    "NTPC":"11630","ONGC":"2475","POWERGRID":"14977","SUNPHARMA":"3351",
+    "TATAMOTORS":"3456","TATASTEEL":"3499","TECHM":"13538","TITAN":"3506",
+    "ULTRACEMCO":"11532","WIPRO":"3787","ADANIENT":"25","ADANIPORTS":"15083",
+    "APOLLOHOSP":"157","ASIANPAINT":"236","BAJAJFINSV":"16675",
+    "BAJAJ-AUTO":"16669","BEL":"383","BPCL":"526","BRITANNIA":"547",
+    "CIPLA":"694","COALINDIA":"20374","DIVISLAB":"10940","DRREDDY":"881",
+    "EICHERMOT":"910","GRASIM":"1232","HCLTECH":"7229","HEROMOTOCO":"1348",
+    "HINDALCO":"1363","INDUSINDBK":"5258","JSWSTEEL":"11723","LTIM":"17818",
+    "SHRIRAMFIN":"4306","TATACONSUM":"3432","ZOMATO":"5097",
+}
+
 def fetch_nifty50(obj):
+    print(f"\n--- Fetching Nifty 50 Stocks ---")
+    # Test first stock with full debug
+    first_sym = "RELIANCE"
+    first_tok = NIFTY50_TOKENS[first_sym]
+    try:
+        r = obj.ltpData("NSE", first_sym, first_tok)
+        print(f"  RELIANCE test raw response: {json.dumps(r)}")
+    except Exception as e:
+        print(f"  RELIANCE test exception: {e}")
+
     stocks = []
     for sym, token in NIFTY50_TOKENS.items():
         try:
             r = obj.ltpData("NSE", sym, token)
-            if r["status"] and r.get("data"):
-                ltp   = float(r["data"].get("ltp",   0))
+            if r.get("status") and r.get("data"):
+                ltp   = float(r["data"].get("ltp",   0) or 0)
                 close = float(r["data"].get("close", ltp) or ltp)
                 chng  = round(ltp - close, 2)
                 pct   = round((chng / close) * 100, 2) if close else 0.0
                 stocks.append({"symbol": sym, "ltp": ltp, "chng": chng, "pChng": pct})
                 print(f"  ✅ {sym}: {ltp}  {pct:+.2f}%")
             else:
-                print(f"  ⚠️  {sym}: no data — {r.get('message','')}")
+                print(f"  ⚠️  {sym}: status={r.get('status')} msg={r.get('message','')}")
                 stocks.append({"symbol": sym, "ltp": None, "chng": None, "pChng": None})
         except Exception as e:
-            print(f"  ⚠️  {sym}: {e}")
+            print(f"  ❌ {sym}: {e}")
             stocks.append({"symbol": sym, "ltp": None, "chng": None, "pChng": None})
         time.sleep(0.2)
+
+    filled = sum(1 for s in stocks if s["ltp"] is not None)
+    print(f"\n  Summary: {filled}/{len(stocks)} stocks have data")
     return stocks
 
-# ── Build Excel workbook ─────────────────────────────────────
+# ── Build Excel ──────────────────────────────────────────────
 def build_excel(label, ist_dt, indices, stocks):
     wb = Workbook(); ws = wb.active
     ws.title = "Snapshot_" + label
     disp     = label[:2]+":"+label[2:] if len(label)==4 else label
     time_str = ist_dt.strftime("%d-%b-%Y %H:%M:%S")
 
-    # Title row
     ws.merge_cells("A1:O1")
     c = ws["A1"]; c.value = f"NSE Market Snapshot  —  {disp} IST"
     sc(c, bg=C["title_bg"], fg=C["white"], bold=True, size=14, ha="center")
@@ -166,8 +178,7 @@ def build_excel(label, ist_dt, indices, stocks):
 
     ws.merge_cells("A2:O2")
     ws["A2"].value = f"Captured At (IST):  {time_str}"
-    ws["A2"].fill = fill("E3F2FD")
-    ws["A2"].font = font(size=10, color="333333")
+    ws["A2"].fill = fill("E3F2FD"); ws["A2"].font = font(size=10, color="333333")
     ws["A2"].alignment = aln("center")
 
     # Index summary
@@ -180,14 +191,14 @@ def build_excel(label, ist_dt, indices, stocks):
 
     for i, name in enumerate(["NIFTY 50","SENSEX","BANK NIFTY","NIFTY IT","NIFTY SMALLCAP 50"]):
         r += 1; d = indices.get(name,{}); pct = d.get("pct")
-        bg  = C["idx_bg"] if i%2==0 else C["idx_alt"]
+        bg = C["idx_bg"] if i%2==0 else C["idx_alt"]
         pos = pct is not None and pct >= 0
         ws.cell(r,1,name).font = font(bold=True)
         ws.cell(r,1).fill=fill(bg); ws.cell(r,1).border=brd(); ws.cell(r,1).alignment=aln()
         for col, val, fmt in [
-            (2, d.get("ltp"),       "#,##0.00"),
-            (3, d.get("chng"),      "+#,##0.00;-#,##0.00"),
-            (4, pct and pct/100,    "+0.00%;-0.00%"),
+            (2, d.get("ltp"),    "#,##0.00"),
+            (3, d.get("chng"),   "+#,##0.00;-#,##0.00"),
+            (4, pct and pct/100, "+0.00%;-0.00%"),
         ]:
             cell = ws.cell(r,col)
             if pct is not None:
@@ -227,15 +238,15 @@ def build_excel(label, ist_dt, indices, stocks):
             cell.font=font(bold=(col>2), color=tc if col>2 else "000000")
             cell.fill=fill(bg); cell.border=brd(); cell.alignment=aln("center")
 
-    # Top 7 positive & negative
+    # Top 7
     valid = [s for s in stocks if s["pChng"] is not None]
     top7p = sorted(valid, key=lambda x: x["pChng"], reverse=True)[:7]
     top7n = sorted(valid, key=lambda x: x["pChng"])[:7]
     trow  = r + 4
 
     for top7, col, title, hbg, tc, b1, b2 in [
-        (top7p, 7,  "🟢  TOP 7 POSITIVE", C["grn_hdr"], C["pos_txt"], C["pos_bg"], C["pos_alt"]),
-        (top7n, 12, "🔴  TOP 7 NEGATIVE", C["red_hdr"], C["neg_txt"], C["neg_bg"], C["neg_alt"]),
+        (top7p,7,"🟢  TOP 7 POSITIVE",C["grn_hdr"],C["pos_txt"],C["pos_bg"],C["pos_alt"]),
+        (top7n,12,"🔴  TOP 7 NEGATIVE",C["red_hdr"],C["neg_txt"],C["neg_bg"],C["neg_alt"]),
     ]:
         ws.merge_cells(start_row=trow, start_column=col, end_row=trow, end_column=col+3)
         sc(ws.cell(trow,col,title), bg=hbg, fg=C["white"], bold=True, size=11, ha="center")
@@ -262,14 +273,13 @@ def build_excel(label, ist_dt, indices, stocks):
 
 # ── Send Email ───────────────────────────────────────────────
 def send_email(creds, xlsx_path, label, ist_dt, indices, stocks):
-    disp     = label[:2]+":"+label[2:] if len(label)==4 else label
-    subject  = f"📊 NSE Snapshot {disp} IST — {ist_dt.strftime('%d %b %Y')}"
+    disp    = label[:2]+":"+label[2:] if len(label)==4 else label
+    subject = f"📊 NSE Snapshot {disp} IST — {ist_dt.strftime('%d %b %Y')}"
 
     valid = [s for s in stocks if s["pChng"] is not None]
     top3p = sorted(valid, key=lambda x: x["pChng"], reverse=True)[:3]
     top3n = sorted(valid, key=lambda x: x["pChng"])[:3]
 
-    # Index rows HTML
     idx_html = ""
     for name in ["NIFTY 50","SENSEX","BANK NIFTY","NIFTY IT","NIFTY SMALLCAP 50"]:
         d = indices.get(name,{}); pct = d.get("pct"); ltp = d.get("ltp")
@@ -277,8 +287,7 @@ def send_email(creds, xlsx_path, label, ist_dt, indices, stocks):
             color = "#1b5e20" if pct>=0 else "#b71c1c"
             bg    = "#e8f5e9" if pct>=0 else "#ffebee"
             arrow = "▲" if pct>=0 else "▼"
-            idx_html += (f'<tr style="background:{bg}">'
-                f'<td style="padding:7px 14px;font-weight:bold">{name}</td>'
+            idx_html += (f'<tr style="background:{bg}"><td style="padding:7px 14px;font-weight:bold">{name}</td>'
                 f'<td style="padding:7px;color:{color};font-weight:bold;text-align:center">{arrow} {pct:+.2f}%</td>'
                 f'<td style="padding:7px;text-align:center">₹{ltp:,.2f}</td></tr>')
         else:
@@ -293,9 +302,11 @@ def send_email(creds, xlsx_path, label, ist_dt, indices, stocks):
             f'<td style="padding:6px;color:{color};text-align:center">₹{s["chng"]:+.2f}</td></tr>'
             for s in lst)
 
-    data_note = ""
-    if not valid:
-        data_note = '<div style="background:#fff3e0;border-radius:6px;padding:10px 14px;margin-top:12px;font-size:13px;color:#e65100">⚠️ No live data — market may be closed. Excel shows previous closing values.</div>'
+    no_data_note = (
+        '<div style="background:#fff3e0;border-radius:6px;padding:10px 14px;margin-top:12px;'
+        'font-size:13px;color:#e65100">⚠️ Market closed or data unavailable. '
+        'Live data available Mon–Fri 9:15 AM – 3:30 PM IST.</div>'
+        if not valid else "")
 
     html = f"""<html><body style="font-family:Arial,sans-serif;max-width:620px;margin:auto">
 <div style="background:#0d47a1;color:white;padding:18px 22px;border-radius:10px 10px 0 0">
@@ -307,28 +318,24 @@ def send_email(creds, xlsx_path, label, ist_dt, indices, stocks):
   <table width="100%" cellspacing="0" style="border-collapse:collapse;border:1px solid #e0e0e0">
     <tr style="background:#1976d2;color:white">
       <th style="padding:8px 14px;text-align:left">Index</th>
-      <th style="padding:8px">% Change</th>
-      <th style="padding:8px">LTP</th>
-    </tr>
-    {idx_html}
+      <th style="padding:8px">% Change</th><th style="padding:8px">LTP</th>
+    </tr>{idx_html}
   </table>
-  <table width="100%" style="margin-top:16px;border-collapse:collapse">
-    <tr valign="top">
-      <td width="50%" style="padding-right:8px">
-        <h3 style="color:#2e7d32;margin:0 0 8px">🏆 Top 3 Gainers</h3>
-        <table width="100%" cellspacing="0" style="border-collapse:collapse;border:1px solid #e0e0e0">
-          {stock_rows(top3p,"#1b5e20","#e8f5e9") if top3p else '<tr><td style="padding:8px;color:#9e9e9e">No data</td></tr>'}
-        </table>
-      </td>
-      <td width="50%" style="padding-left:8px">
-        <h3 style="color:#c62828;margin:0 0 8px">📉 Top 3 Losers</h3>
-        <table width="100%" cellspacing="0" style="border-collapse:collapse;border:1px solid #e0e0e0">
-          {stock_rows(top3n,"#b71c1c","#ffebee") if top3n else '<tr><td style="padding:8px;color:#9e9e9e">No data</td></tr>'}
-        </table>
-      </td>
-    </tr>
-  </table>
-  {data_note}
+  <table width="100%" style="margin-top:16px;border-collapse:collapse"><tr valign="top">
+    <td width="50%" style="padding-right:8px">
+      <h3 style="color:#2e7d32;margin:0 0 8px">🏆 Top 3 Gainers</h3>
+      <table width="100%" cellspacing="0" style="border-collapse:collapse;border:1px solid #e0e0e0">
+        {stock_rows(top3p,"#1b5e20","#e8f5e9") if top3p else '<tr><td style="padding:8px;color:#9e9e9e">No data</td></tr>'}
+      </table>
+    </td>
+    <td width="50%" style="padding-left:8px">
+      <h3 style="color:#c62828;margin:0 0 8px">📉 Top 3 Losers</h3>
+      <table width="100%" cellspacing="0" style="border-collapse:collapse;border:1px solid #e0e0e0">
+        {stock_rows(top3n,"#b71c1c","#ffebee") if top3n else '<tr><td style="padding:8px;color:#9e9e9e">No data</td></tr>'}
+      </table>
+    </td>
+  </tr></table>
+  {no_data_note}
   <div style="margin-top:16px;padding:12px 14px;background:#f5f5f5;border-radius:8px;font-size:13px">
     📎 Full Excel with all 50 stocks attached<br>
     ☁️ Also saved to your Google Drive → NSE Snapshots folder
@@ -340,36 +347,32 @@ def send_email(creds, xlsx_path, label, ist_dt, indices, stocks):
     msg["To"]   = creds["recipient"]
     msg["Subject"] = subject
     msg.attach(MIMEText(html, "html"))
-
     with open(xlsx_path, "rb") as f:
         part = MIMEBase("application","vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         part.set_payload(f.read())
         encoders.encode_base64(part)
         part.add_header("Content-Disposition","attachment",filename=os.path.basename(xlsx_path))
         msg.attach(part)
-
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(creds["gmail_sender"], creds["gmail_pass"])
         s.sendmail(creds["gmail_sender"], creds["recipient"], msg.as_string())
     print(f"✅ Email sent to {creds['recipient']}")
 
-# ── Google Drive upload ──────────────────────────────────────
+# ── Google Drive ─────────────────────────────────────────────
 def upload_drive(creds, xlsx_path):
-    svc = build("drive","v3", credentials=get_sa_creds(
+    svc  = build("drive","v3", credentials=get_sa_creds(
         creds["sa_json"], ["https://www.googleapis.com/auth/drive"]))
     name = os.path.basename(xlsx_path)
-    # Delete existing file with same name
-    q = f"name='{name}' and '{creds['drive_folder']}' in parents and trashed=false"
+    q    = f"name='{name}' and '{creds['drive_folder']}' in parents and trashed=false"
     for f in svc.files().list(q=q, fields="files(id)").execute().get("files",[]):
         svc.files().delete(fileId=f["id"]).execute()
     meta  = {"name": name, "parents": [creds["drive_folder"]]}
     media = MediaFileUpload(xlsx_path,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     res = svc.files().create(body=meta, media_body=media, fields="id,webViewLink").execute()
-    print(f"✅ Drive: {name}")
-    print(f"   {res.get('webViewLink','')}")
+    print(f"✅ Drive upload done: {res.get('webViewLink','')}")
 
-# ── Google Sheets update ─────────────────────────────────────
+# ── Google Sheets ─────────────────────────────────────────────
 def update_sheets(creds, label, ist_dt, indices, stocks):
     gc  = gspread.authorize(get_sa_creds(
         creds["sa_json"], ["https://www.googleapis.com/auth/spreadsheets"]))
@@ -378,43 +381,35 @@ def update_sheets(creds, label, ist_dt, indices, stocks):
     try: sh.del_worksheet(sh.worksheet(tab))
     except: pass
     ws  = sh.add_worksheet(title=tab, rows=120, cols=16)
-
     disp = label[:2]+":"+label[2:] if len(label)==4 else label
     rows = [
-        [f"NSE Market Snapshot — {disp} IST"] + [""]*14,
-        [f"Captured: {ist_dt.strftime('%d-%b-%Y %H:%M:%S IST')}"] + [""]*14,
+        [f"NSE Market Snapshot — {disp} IST"]+[""]*14,
+        [f"Captured: {ist_dt.strftime('%d-%b-%Y %H:%M:%S IST')}"]+[""]*14,
         [""]*15,
-        ["INDEX","LTP","CHANGE","% CHANGE",""] +
-        ["TOP 7 POSITIVE","","","",""] +
-        ["TOP 7 NEGATIVE","","",""]
+        ["INDEX","LTP","CHANGE","% CHANGE",""]+["TOP 7 POSITIVE","","","",""]+["TOP 7 NEGATIVE","","",""]
     ]
     for name in ["NIFTY 50","SENSEX","BANK NIFTY","NIFTY IT","NIFTY SMALLCAP 50"]:
-        d = indices.get(name,{}); p = d.get("pct")
+        d=indices.get(name,{}); p=d.get("pct")
         rows.append([name, d.get("ltp","N/A"), d.get("chng","N/A"),
-                     f"{p:+.2f}%" if p is not None else "N/A", ""] + [""]*10)
-
+                     f"{p:+.2f}%" if p is not None else "N/A",""]+[""]*10)
     rows.append([""]*15)
     rows.append(["#","SYMBOL","LTP","CHG","% CHG","",
-                 "SYMBOL","LTP","CHG","% CHG","",
-                 "SYMBOL","LTP","CHG","% CHG"])
-
-    valid = [s for s in stocks if s["pChng"] is not None]
-    top7p = sorted(valid, key=lambda x: x["pChng"], reverse=True)[:7]
-    top7n = sorted(valid, key=lambda x: x["pChng"])[:7]
-
+                 "SYMBOL","LTP","CHG","% CHG","","SYMBOL","LTP","CHG","% CHG"])
+    valid=[s for s in stocks if s["pChng"] is not None]
+    top7p=sorted(valid,key=lambda x:x["pChng"],reverse=True)[:7]
+    top7n=sorted(valid,key=lambda x:x["pChng"])[:7]
     for i, s in enumerate(stocks):
-        p = s["pChng"]
-        row = [i+1, s["symbol"], s.get("ltp",""),
-               f'{s["chng"]:+.2f}' if s["chng"] is not None else "",
-               f'{p:+.2f}%' if p is not None else "", ""]
-        row += ([top7p[i]["symbol"], top7p[i]["ltp"],
-                 f'{top7p[i]["chng"]:+.2f}', f'{top7p[i]["pChng"]:+.2f}%', ""]
-                if i < len(top7p) else [""]*5)
-        row += ([top7n[i]["symbol"], top7n[i]["ltp"],
-                 f'{top7n[i]["chng"]:+.2f}', f'{top7n[i]["pChng"]:+.2f}%']
-                if i < len(top7n) else [""]*4)
+        p=s["pChng"]
+        row=[i+1,s["symbol"],s.get("ltp",""),
+             f'{s["chng"]:+.2f}' if s["chng"] is not None else "",
+             f'{p:+.2f}%' if p is not None else "",""]
+        row+=([top7p[i]["symbol"],top7p[i]["ltp"],
+               f'{top7p[i]["chng"]:+.2f}',f'{top7p[i]["pChng"]:+.2f}%',""]
+              if i<len(top7p) else [""]*5)
+        row+=([top7n[i]["symbol"],top7n[i]["ltp"],
+               f'{top7n[i]["chng"]:+.2f}',f'{top7n[i]["pChng"]:+.2f}%']
+              if i<len(top7n) else [""]*4)
         rows.append(row)
-
     ws.update("A1", rows)
     print(f"✅ Google Sheets updated: {tab}")
 
@@ -426,24 +421,18 @@ def main():
 
     print(f"\n{'='*55}")
     print(f"  NSE Snapshot — {disp} IST | {ist_dt.strftime('%d-%b-%Y')}")
-    print(f"  Running on GitHub Actions — no PC needed")
-    print(f"{'='*55}\n")
+    print(f"{'='*55}")
 
-    creds = get_creds()
-
-    print("🔑 Logging in to Angel One...")
-    obj = angel_login(creds)
-
-    print("\n📊 Fetching indices...")
+    creds   = get_creds()
+    obj     = angel_login(creds)
     indices = fetch_indices(obj)
-
-    print("\n📋 Fetching all 50 Nifty stocks...")
-    stocks = fetch_nifty50(obj)
+    stocks  = fetch_nifty50(obj)
 
     filled = sum(1 for s in stocks if s["ltp"] is not None)
-    print(f"\n  Data received for {filled}/{len(stocks)} stocks")
+    print(f"\n📊 Data: {filled}/{len(stocks)} stocks filled")
+    print(f"📊 Indices filled: {sum(1 for v in indices.values() if v['ltp'] is not None)}/5")
 
-    print("\n📁 Building Excel file...")
+    print("\n📁 Building Excel...")
     wb = build_excel(label, ist_dt, indices, stocks)
     os.makedirs("output", exist_ok=True)
     xlsx = f"output/NSE_{ist_dt.strftime('%Y-%m-%d')}_{label}.xlsx"
@@ -453,10 +442,10 @@ def main():
     print("\n📧 Sending email...")
     send_email(creds, xlsx, label, ist_dt, indices, stocks)
 
-    print("\n☁️  Uploading to Google Drive...")
+    print("\n☁️  Uploading to Drive...")
     upload_drive(creds, xlsx)
 
-    print("\n📊 Updating Google Sheets...")
+    print("\n📊 Updating Sheets...")
     update_sheets(creds, label, ist_dt, indices, stocks)
 
     print(f"\n✅ ALL DONE — {disp} IST\n")
