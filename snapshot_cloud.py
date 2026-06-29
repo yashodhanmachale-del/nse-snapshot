@@ -616,7 +616,7 @@ def main():
     creds   = get_creds()
     obj     = angel_login(creds)
     indices = fetch_indices(obj)
-    stocks  = fetch_nifty50(obj)
+    stocks  = fetch_nifty_stocks(obj)
 
     print("\n📁 Building Excel...")
     wb = build_excel(label, ist_dt, indices, stocks)
