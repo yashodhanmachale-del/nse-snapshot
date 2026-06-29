@@ -246,10 +246,11 @@ def build_excel(label, ist_dt, indices, stocks):
         ws.cell(r,1,name).font = font(bold=True)
         ws.cell(r,1).fill=fill(bg); ws.cell(r,1).border=brd(); ws.cell(r,1).alignment=aln()
         for col, val, fmt in [
-            (2, d.get("ltp"),    "#,##0.00"),
-            (3, d.get("chng"),   "+#,##0.00;-#,##0.00"),
-            (4, pct and pct/100, "+0.00%;-0.00%"),
-        ]:
+    (3, s["ltp"],                      "#,##0.00"),
+    (4, s["chng"],                     "+#,##0.00;-#,##0.00"),
+    (5, s["pChng"] and s["pChng"]/100, "+0.00%;-0.00%"),
+    (6, s["impact"],                   "0.00"),
+]:
             cell = ws.cell(r,col)
             if pct is not None:
                 cell.value=val; cell.number_format=fmt
@@ -260,7 +261,7 @@ def build_excel(label, ist_dt, indices, stocks):
             cell.border=brd(); cell.alignment=aln("center")
 
     sr = r + 3
-    ws.merge_cells(f"A{sr}:E{sr}")
+    ws.merge_cells(f"A{sr}:F{sr}")
     sc(ws.cell(sr,1,f"📋  ALL NIFTY 50 STOCKS  [{len(stocks)} stocks]"),
        bg=C["hdr_dark"], fg=C["white"], bold=True, size=11, ha="center")
     sr += 1
@@ -310,7 +311,7 @@ def build_excel(label, ist_dt, indices, stocks):
         for h, dc in zip(
     ["SYMBOL","LTP (₹)","CHG (₹)","% CHG","IMPACT"],
     range(col,col+5)
-):
+    ):
             sc(ws.cell(trow+1,dc,h), bg=hbg, fg=C["white"], bold=True, ha="center")
         for i, s in enumerate(top7):
             tr=trow+2+i; bg=b1 if i%2==0 else b2
@@ -320,7 +321,7 @@ def build_excel(label, ist_dt, indices, stocks):
     (col+2, s["chng"],                     "+#,##0.00;-#,##0.00"),
     (col+3, s["pChng"] and s["pChng"]/100, "+0.00%;-0.00%"),
     (col+4, s["impact"],                   "0.00"),
-]:
+    ]:
                 cell=ws.cell(tr,dc,val)
                 if val is not None and fmt: cell.number_format=fmt
                 cell.font=font(bold=True, color=tc)
