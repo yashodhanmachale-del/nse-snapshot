@@ -112,6 +112,7 @@ def fetch_indices(obj):
         time.sleep(1)  # FIX 2: 1 second delay between index calls
     return result
 def fetch_nifty_stocks(obj):
+    print("######## IMPACT VERSION LOADED ########")
     print("\n📋 Fetching Nifty 50 stocks...")
 
     stocks = []
