@@ -490,28 +490,60 @@ def update_sheets(creds, label, ist_dt, indices, stocks):
             rows.append([name, d.get("ltp","N/A"), d.get("chng","N/A"),
                          f"{p:+.2f}%" if p is not None else "N/A",""]+[""]*10)
         rows.append([""]*15)
-        rows.append(["#","SYMBOL","LTP","CHG","% CHG","",
-                     "SYMBOL","LTP","CHG","% CHG","","SYMBOL","LTP","CHG","% CHG"])
-        valid=[s for s in stocks if s["pChng"] is not None]
-        top7p=sorted(valid,key=lambda x:x["pChng"],reverse=True)[:7]
-        top7n=sorted(valid,key=lambda x:x["pChng"])[:7]
-        for i, s in enumerate(stocks):
-            p=s["pChng"]
-            row=[i+1,s["symbol"],s.get("ltp",""),
-                 f'{s["chng"]:+.2f}' if s["chng"] is not None else "",
-                 f'{p:+.2f}%' if p is not None else "",""]
-            row+=([top7p[i]["symbol"],top7p[i]["ltp"],
-                   f'{top7p[i]["chng"]:+.2f}',f'{top7p[i]["pChng"]:+.2f}%',""]
-                  if i<len(top7p) else [""]*5)
-            row+=([top7n[i]["symbol"],top7n[i]["ltp"],
-                   f'{top7n[i]["chng"]:+.2f}',f'{top7n[i]["pChng"]:+.2f}%']
-                  if i<len(top7n) else [""]*4)
-            rows.append(row)
-        ws.update("A1", rows)
-        print(f"✅ Google Sheets updated: {tab}")
-    except Exception as e:
-        print(f"⚠️  Sheets update failed: {e}")
+        rows.append([
+    "#","SYMBOL","LTP","CHG","% CHG","IMPACT",
+    "SYMBOL","LTP","CHG","% CHG","IMPACT",
+    "SYMBOL","LTP","CHG","% CHG","IMPACT"
+])
+        valid = [s for s in stocks if s.get("impact") is not None]
 
+top7p = sorted(
+    valid,
+    key=lambda x: x["impact"],
+    reverse=True
+)[:7]
+
+top7n = sorted(
+    valid,
+    key=lambda x: x["impact"]
+)[:7]
+
+for i, s in enumerate(stocks):
+
+    p = s["pChng"]
+
+    row = [
+        i + 1,
+        s["symbol"],
+        s.get("ltp", ""),
+        f'{s["chng"]:+.2f}' if s["chng"] is not None else "",
+        f'{p:+.2f}%' if p is not None else "",
+        round(s["impact"], 2) if s.get("impact") is not None else ""
+    ]
+
+    row += (
+        [
+            top7p[i]["symbol"],
+            top7p[i]["ltp"],
+            f'{top7p[i]["chng"]:+.2f}',
+            f'{top7p[i]["pChng"]:+.2f}%',
+            round(top7p[i]["impact"], 2)
+        ]
+        if i < len(top7p) else [""] * 5
+    )
+
+    row += (
+        [
+            top7n[i]["symbol"],
+            top7n[i]["ltp"],
+            f'{top7n[i]["chng"]:+.2f}',
+            f'{top7n[i]["pChng"]:+.2f}%',
+            round(top7n[i]["impact"], 2)
+        ]
+        if i < len(top7n) else [""] * 5
+    )
+
+    rows.append(row)
 # ── MAIN ─────────────────────────────────────────────────────
 def main():
     ist_dt = datetime.now(IST)
