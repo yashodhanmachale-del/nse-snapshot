@@ -102,6 +102,7 @@ def fetch_indices(obj):
                 pct   = round((chng / close) * 100, 2) if close else 0.0
                 weight = NIFTY_WEIGHTS.get(sym, 0)
                 impact = round((pct * weight) / 100, 2)
+                print(f"TEST => {sym} | pct={pct} | weight={weight} | impact={impact}")
                 result[name] = {"ltp": ltp, "chng": chng, "pct": pct}
                 print(f"  ✅ {name}: {ltp}  {pct:+.2f}%")
             else:
@@ -131,15 +132,17 @@ def fetch_nifty_stocks(obj):
 
                 weight = NIFTY_WEIGHTS.get(sym, 0)
 
-                impact = round((pct * weight) / 100, 2)
+impact = round((pct * weight) / 100, 2)
 
-                stocks.append({
-                    "symbol": sym,
-                    "ltp": ltp,
-                    "chng": chng,
-                    "pChng": pct,
-                    "impact": impact
-                })
+print(f"TEST => {sym} | pct={pct} | weight={weight} | impact={impact}")
+
+stocks.append({
+    "symbol": sym,
+    "ltp": ltp,
+    "chng": chng,
+    "pChng": pct,
+    "impact": impact
+})
 
                 print(
                     f"✅ {sym}: {pct:+.2f}%  Impact={impact:+.2f}"
