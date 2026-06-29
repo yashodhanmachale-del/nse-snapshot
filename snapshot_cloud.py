@@ -288,33 +288,63 @@ def build_excel(label, ist_dt, indices, stocks):
             cell.fill=fill(bg); cell.border=brd(); cell.alignment=aln("center")
 
     valid = [s for s in stocks if s["pChng"] is not None]
-    top7p = sorted(valid, key=lambda x:x["contribution"], reverse=True)[:7]
-    top7n = sorted(valid, key=lambda x:x["contribution"])[:7]
+    top7p = sorted(
+    valid,
+    key=lambda x: x["impact"] if x["impact"] is not None else -999999,
+    reverse=True
+)[:7]
+
+top7n = sorted(
+    valid,
+    key=lambda x: x["impact"] if x["impact"] is not None else 999999
+)[:7]
     trow  = r + 4
 
     for top7, col, title, hbg, tc, b1, b2 in [
         (top7p,7,"🟢  TOP 7 POSITIVE",C["grn_hdr"],C["pos_txt"],C["pos_bg"],C["pos_alt"]),
         (top7n,12,"🔴  TOP 7 NEGATIVE",C["red_hdr"],C["neg_txt"],C["neg_bg"],C["neg_alt"]),
     ]:
-        ws.merge_cells(start_row=trow, start_column=col, end_row=trow, end_column=col+3)
+        ws.merge_cells(start_row=trow, start_column=col, end_row=trow, end_column=col+4))
         sc(ws.cell(trow,col,title), bg=hbg, fg=C["white"], bold=True, size=11, ha="center")
-        for h, dc in zip(["SYMBOL","LTP (₹)","CHG (₹)","% CHG"], range(col,col+4)):
+        for h, dc in zip(
+    ["SYMBOL","LTP (₹)","CHG (₹)","% CHG","IMPACT"],
+    range(col,col+5)
+):
             sc(ws.cell(trow+1,dc,h), bg=hbg, fg=C["white"], bold=True, ha="center")
         for i, s in enumerate(top7):
             tr=trow+2+i; bg=b1 if i%2==0 else b2
             for dc, val, fmt in [
-                (col,   s["symbol"],                   None),
-                (col+1, s["ltp"],                      "#,##0.00"),
-                (col+2, s["chng"],                     "+#,##0.00;-#,##0.00"),
-                (col+3, s["pChng"] and s["pChng"]/100, "+0.00%;-0.00%"),
-            ]:
+    (col,   s["symbol"],                   None),
+    (col+1, s["ltp"],                      "#,##0.00"),
+    (col+2, s["chng"],                     "+#,##0.00;-#,##0.00"),
+    (col+3, s["pChng"] and s["pChng"]/100, "+0.00%;-0.00%"),
+    (col+4, s["impact"],                   "0.00"),
+]:
                 cell=ws.cell(tr,dc,val)
                 if val is not None and fmt: cell.number_format=fmt
                 cell.font=font(bold=True, color=tc)
                 cell.fill=fill(bg); cell.border=brd()
                 cell.alignment=aln("center" if dc>col else "left")
 
-    for col, w in {1:4,2:15,3:13,4:13,5:11,7:15,8:13,9:13,10:11,12:15,13:13,14:13,15:11}.items():
+    for col, w in {
+    1:4,
+    2:15,
+    3:13,
+    4:13,
+    5:11,
+
+    7:15,
+    8:13,
+    9:13,
+    10:11,
+    11:12,
+
+    13:15,
+    14:13,
+    15:13,
+    16:11,
+    17:12
+}.items():
         ws.column_dimensions[get_column_letter(col)].width = w
     ws.freeze_panes = "A3"
     return wb
