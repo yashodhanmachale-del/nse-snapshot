@@ -555,8 +555,7 @@ def update_sheets(creds, label, ist_dt, indices, stocks):
     "#","SYMBOL","LTP","CHG","% CHG","IMPACT",
     "SYMBOL","LTP","CHG","% CHG","IMPACT",
     "SYMBOL","LTP","CHG","% CHG","IMPACT"
-])
-         valid = [s for s in stocks if s.get("impact") is not None]
+])        valid = [s for s in stocks if s.get("impact") is not None]
 
         top7p = sorted(
             valid,
@@ -569,7 +568,7 @@ def update_sheets(creds, label, ist_dt, indices, stocks):
             key=lambda x: x["impact"]
         )[:7]
 
-                for i, s in enumerate(stocks):
+        for i, s in enumerate(stocks):
 
             p = s["pChng"]
 
@@ -605,9 +604,10 @@ def update_sheets(creds, label, ist_dt, indices, stocks):
             )
 
             rows.append(row)
-         ws.update("A1", rows)
 
-         print(f"✅ Google Sheets updated: {tab}")
+        ws.update("A1", rows)
+
+        print(f"✅ Google Sheets updated: {tab}")
 # ── MAIN ─────────────────────────────────────────────────────
 def main():
     ist_dt = datetime.now(IST)
