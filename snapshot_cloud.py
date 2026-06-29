@@ -287,19 +287,20 @@ def build_excel(label, ist_dt, indices, stocks):
             cell.font=font(bold=(col>2), color=tc if col>2 else "000000")
             cell.fill=fill(bg); cell.border=brd(); cell.alignment=aln("center")
 
-    valid = [s for s in stocks if s["pChng"] is not None]
+   valid = [s for s in stocks if s["pChng"] is not None]
+
     top7p = sorted(
-    valid,
-    key=lambda x: x["impact"] if x["impact"] is not None else -999999,
-    reverse=True
-)[:7]
+        valid,
+        key=lambda x: x["impact"] if x["impact"] is not None else -999999,
+        reverse=True
+    )[:7]
 
-top7n = sorted(
-    valid,
-    key=lambda x: x["impact"] if x["impact"] is not None else 999999
-)[:7]
-    trow  = r + 4
+    top7n = sorted(
+        valid,
+        key=lambda x: x["impact"] if x["impact"] is not None else 999999
+    )[:7]
 
+    trow = r + 4
     for top7, col, title, hbg, tc, b1, b2 in [
         (top7p,7,"🟢  TOP 7 POSITIVE",C["grn_hdr"],C["pos_txt"],C["pos_bg"],C["pos_alt"]),
         (top7n,12,"🔴  TOP 7 NEGATIVE",C["red_hdr"],C["neg_txt"],C["neg_bg"],C["neg_alt"]),
