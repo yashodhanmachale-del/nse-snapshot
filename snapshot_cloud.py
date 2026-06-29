@@ -558,17 +558,26 @@ def update_sheets(creds, label, ist_dt, indices, stocks):
 ])
         valid = [s for s in stocks if s.get("impact") is not None]
 
-top7p = sorted(
-    valid,
-    key=lambda x: x["impact"],
-    reverse=True
-)[:7]
+        top7p = sorted(
+            valid,
+            key=lambda x: x["impact"],
+            reverse=True
+        )[:7]
 
-top7n = sorted(
-    valid,
-    key=lambda x: x["impact"]
-)[:7]
-for i, s in enumerate(stocks):
+        top7n = sorted(
+            valid,
+            key=lambda x: x["impact"]
+        )[:7]
+
+        for i, s in enumerate(stocks):
+            row = [
+    i + 1,
+    s["symbol"],
+    s.get("ltp", ""),
+    f'{s["chng"]:+.2f}' if s["chng"] is not None else "",
+    f'{p:+.2f}%' if p is not None else "",
+    round(s["impact"], 2) if s.get("impact") is not None else ""
+]
 
     p = s["pChng"]
 
