@@ -100,6 +100,8 @@ def fetch_indices(obj):
                 close = float(r["data"].get("close", ltp) or ltp)
                 chng  = round(ltp - close, 2)
                 pct   = round((chng / close) * 100, 2) if close else 0.0
+                weight = NIFTY_WEIGHTS.get(sym, 0)
+                impact = round((pct * weight) / 100, 2)
                 result[name] = {"ltp": ltp, "chng": chng, "pct": pct}
                 print(f"  ✅ {name}: {ltp}  {pct:+.2f}%")
             else:
