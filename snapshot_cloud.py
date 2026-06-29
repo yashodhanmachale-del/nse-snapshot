@@ -111,7 +111,64 @@ def fetch_indices(obj):
             result[name] = {"ltp": None, "chng": None, "pct": None}
         time.sleep(1)  # FIX 2: 1 second delay between index calls
     return result
+def fetch_nifty_stocks(obj):
+    print("\n📋 Fetching Nifty 50 stocks...")
 
+    stocks = []
+
+    for sym, (trading_sym, token) in NIFTY50_TOKENS.items():
+        try:
+            r = obj.ltpData("NSE", trading_sym, token)
+
+            if r.get("status") and r.get("data"):
+
+                ltp   = float(r["data"].get("ltp", 0) or 0)
+                close = float(r["data"].get("close", ltp) or ltp)
+
+                chng = round(ltp - close, 2)
+                pct  = round((chng / close) * 100, 2) if close else 0.0
+
+                weight = NIFTY_WEIGHTS.get(sym, 0)
+
+                impact = round((pct * weight) / 100, 2)
+
+                stocks.append({
+                    "symbol": sym,
+                    "ltp": ltp,
+                    "chng": chng,
+                    "pChng": pct,
+                    "impact": impact
+                })
+
+                print(
+                    f"✅ {sym}: {pct:+.2f}%  Impact={impact:+.2f}"
+                )
+
+            else:
+
+                stocks.append({
+                    "symbol": sym,
+                    "ltp": None,
+                    "chng": None,
+                    "pChng": None,
+                    "impact": None
+                })
+
+        except Exception as e:
+
+            print(f"❌ {sym}: {e}")
+
+            stocks.append({
+                "symbol": sym,
+                "ltp": None,
+                "chng": None,
+                "pChng": None,
+                "impact": None
+            })
+
+        time.sleep(1)
+
+    return stocks
 # ── FIX 2: Hardcoded tokens + larger delays to avoid rate limit
 NIFTY50_TOKENS = {
     "RELIANCE":   ("RELIANCE-EQ",   "2885"),
@@ -472,6 +529,7 @@ def upload_drive(creds, xlsx_path):
 
 # ── Google Sheets ─────────────────────────────────────────────
 def update_sheets(creds, label, ist_dt, indices, stocks):
+    print("******** IMPACT VERSION LOADED ********")
     try:
         gc  = gspread.authorize(get_sa_creds(
             creds["sa_json"], ["https://www.googleapis.com/auth/spreadsheets"]))
@@ -509,7 +567,6 @@ top7n = sorted(
     valid,
     key=lambda x: x["impact"]
 )[:7]
-
 for i, s in enumerate(stocks):
 
     p = s["pChng"]
