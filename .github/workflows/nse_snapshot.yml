@@ -2,12 +2,13 @@ name: NSE Market Snapshot
 
 on:
   schedule:
-    - cron: '45 3 * * 1-5'
-    - cron: '50 3 * * 1-5'
-    - cron: '0 4 * * 1-5'
-    - cron: '15 4 * * 1-5'
-    - cron: '30 4 * * 1-5'
-    - cron: '0 8 * * 1-5'
+    - cron: '45 3 * * 1-5'   # 9:15  IST
+    - cron: '50 3 * * 1-5'   # 9:20  IST
+    - cron: '0 4 * * 1-5'    # 9:30  IST
+    - cron: '15 4 * * 1-5'   # 9:45  IST
+    - cron: '30 4 * * 1-5'   # 10:00 IST
+    - cron: '0 8 * * 1-5'    # 13:30 IST
+    - cron: '45 9 * * 1-5'   # 15:15 IST
   workflow_dispatch:
     inputs:
       label:
