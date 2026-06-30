@@ -1,9 +1,10 @@
 """
-snapshot_cloud.py v7 — Added Nifty point contribution per stock
-Contribution(pts) = Nifty Level × (Stock %Chg/100) × Stock Weight%
+snapshot_cloud.py v8 — Updated to current Nifty 50 list (as provided)
+Auto-fetches symbol tokens from Angel One's official instrument master
+(no more hardcoded/wrong tokens — works for any stock automatically)
 """
 
-import os, json, pyotp, gspread, traceback, smtplib, time
+import os, json, pyotp, gspread, traceback, smtplib, time, requests
 from SmartApi import SmartConnect
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -19,6 +20,7 @@ from email.mime.text import MIMEText
 from email import encoders
 
 IST = ZoneInfo("Asia/Kolkata")
+INSTRUMENT_MASTER_URL = "https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMaster.json"
 
 def env(key):
     val = os.environ.get(key, "")
@@ -76,6 +78,26 @@ def angel_login(creds):
     print("✅ Login OK")
     return obj
 
+# ── Download instrument master & build symbol→token lookup ──
+def load_token_map():
+    print("\n📥 Downloading Angel One instrument master...")
+    r = requests.get(INSTRUMENT_MASTER_URL, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    print(f"  Loaded {len(data)} instruments")
+
+    # Build map: "SYMBOL" (without -EQ) -> {token, tradingsymbol}
+    token_map = {}
+    for item in data:
+        if item.get("exch_seg") == "NSE" and item.get("symbol","").endswith("-EQ"):
+            base_symbol = item["symbol"].replace("-EQ", "")
+            token_map[base_symbol] = {
+                "token": item["token"],
+                "tradingsymbol": item["symbol"],
+            }
+    print(f"  Built token map for {len(token_map)} NSE equities")
+    return token_map
+
 INDEX_TOKENS = {
     "NIFTY 50":          ("NSE", "Nifty 50",          "99926000"),
     "SENSEX":            ("BSE", "SENSEX",             "99919000"),
@@ -105,99 +127,80 @@ def fetch_indices(obj):
         time.sleep(1)
     return result
 
-# ── Stock tokens + Official Nifty 50 weights (NSE index methodology, % of free-float mcap) ─
-# Weights approximate as of latest Nifty rebalance — update periodically from nseindia.com
-NIFTY50_STOCKS = {
-    "RELIANCE":   {"tok": "2885",  "ts": "RELIANCE-EQ",   "wt": 9.25},
-    "HDFCBANK":   {"tok": "1333",  "ts": "HDFCBANK-EQ",   "wt": 12.80},
-    "ICICIBANK":  {"tok": "4963",  "ts": "ICICIBANK-EQ",  "wt": 8.85},
-    "INFY":       {"tok": "1594",  "ts": "INFY-EQ",       "wt": 5.85},
-    "TCS":        {"tok": "11536", "ts": "TCS-EQ",        "wt": 3.90},
-    "BHARTIARTL": {"tok": "10604", "ts": "BHARTIARTL-EQ", "wt": 4.20},
-    "ITC":        {"tok": "1660",  "ts": "ITC-EQ",        "wt": 3.55},
-    "LT":         {"tok": "11483", "ts": "LT-EQ",         "wt": 3.45},
-    "KOTAKBANK":  {"tok": "1922",  "ts": "KOTAKBANK-EQ",  "wt": 2.95},
-    "AXISBANK":   {"tok": "5900",  "ts": "AXISBANK-EQ",   "wt": 2.85},
-    "SBIN":       {"tok": "3045",  "ts": "SBIN-EQ",       "wt": 2.75},
-    "HINDUNILVR": {"tok": "1394",  "ts": "HINDUNILVR-EQ", "wt": 2.30},
-    "BAJFINANCE": {"tok": "317",   "ts": "BAJFINANCE-EQ", "wt": 2.05},
-    "M&M":        {"tok": "2031",  "ts": "M&M-EQ",        "wt": 1.95},
-    "MARUTI":     {"tok": "10999", "ts": "MARUTI-EQ",     "wt": 1.55},
-    "SUNPHARMA":  {"tok": "3351",  "ts": "SUNPHARMA-EQ",  "wt": 1.50},
-    "TATAMOTORS": {"tok": "3456",  "ts": "TATAMOTORS-EQ", "wt": 1.40},
-    "ULTRACEMCO": {"tok": "11532", "ts": "ULTRACEMCO-EQ", "wt": 1.35},
-    "HCLTECH":    {"tok": "7229",  "ts": "HCLTECH-EQ",    "wt": 1.30},
-    "TITAN":      {"tok": "3506",  "ts": "TITAN-EQ",      "wt": 1.25},
-    "BAJAJFINSV": {"tok": "16675", "ts": "BAJAJFINSV-EQ", "wt": 1.20},
-    "ASIANPAINT": {"tok": "236",   "ts": "ASIANPAINT-EQ", "wt": 1.15},
-    "ADANIENT":   {"tok": "25",    "ts": "ADANIENT-EQ",   "wt": 1.10},
-    "NTPC":       {"tok": "11630", "ts": "NTPC-EQ",       "wt": 1.10},
-    "ONGC":       {"tok": "2475",  "ts": "ONGC-EQ",       "wt": 1.05},
-    "POWERGRID":  {"tok": "14977", "ts": "POWERGRID-EQ",  "wt": 1.05},
-    "TATASTEEL":  {"tok": "3499",  "ts": "TATASTEEL-EQ",  "wt": 1.00},
-    "TECHM":      {"tok": "13538", "ts": "TECHM-EQ",      "wt": 0.95},
-    "WIPRO":      {"tok": "3787",  "ts": "WIPRO-EQ",      "wt": 0.90},
-    "ADANIPORTS": {"tok": "15083", "ts": "ADANIPORTS-EQ", "wt": 0.90},
-    "COALINDIA":  {"tok": "20374", "ts": "COALINDIA-EQ",  "wt": 0.85},
-    "JSWSTEEL":   {"tok": "11723", "ts": "JSWSTEEL-EQ",   "wt": 0.80},
-    "BAJAJ-AUTO": {"tok": "16669", "ts": "BAJAJ-AUTO-EQ", "wt": 0.80},
-    "BPCL":       {"tok": "526",   "ts": "BPCL-EQ",       "wt": 0.75},
-    "HINDALCO":   {"tok": "1363",  "ts": "HINDALCO-EQ",   "wt": 0.75},
-    "GRASIM":     {"tok": "1232",  "ts": "GRASIM-EQ",     "wt": 0.70},
-    "DRREDDY":    {"tok": "881",   "ts": "DRREDDY-EQ",    "wt": 0.65},
-    "CIPLA":      {"tok": "694",   "ts": "CIPLA-EQ",      "wt": 0.65},
-    "EICHERMOT":  {"tok": "910",   "ts": "EICHERMOT-EQ",  "wt": 0.65},
-    "BRITANNIA":  {"tok": "547",   "ts": "BRITANNIA-EQ",  "wt": 0.60},
-    "INDUSINDBK": {"tok": "5258",  "ts": "INDUSINDBK-EQ", "wt": 0.60},
-    "APOLLOHOSP": {"tok": "157",   "ts": "APOLLOHOSP-EQ", "wt": 0.55},
-    "DIVISLAB":   {"tok": "10940", "ts": "DIVISLAB-EQ",   "wt": 0.55},
-    "TATACONSUM": {"tok": "3432",  "ts": "TATACONSUM-EQ", "wt": 0.55},
-    "HEROMOTOCO": {"tok": "1348",  "ts": "HEROMOTOCO-EQ", "wt": 0.50},
-    "BEL":        {"tok": "383",   "ts": "BEL-EQ",        "wt": 0.50},
-    "SHRIRAMFIN": {"tok": "4306",  "ts": "SHRIRAMFIN-EQ", "wt": 0.45},
-    "LTIM":       {"tok": "17818", "ts": "LTM-EQ",        "wt": 0.45},
-    "ZOMATO":     {"tok": "5097",  "ts": "ZOMATO-EQ",     "wt": 0.40},
+# ── UPDATED NIFTY 50 LIST (as provided) with approximate weights ──
+# Note: TMPV and ETERNAL are newer/renamed listings (e.g. Zomato → ETERNAL).
+# Weight % approximate — update periodically from nseindia.com if precision matters.
+NIFTY50_LIST = {
+    "RELIANCE":   9.25,  "HDFCBANK":   12.80, "ICICIBANK":  8.85,
+    "INFY":       5.85,  "TCS":        3.90,  "BHARTIARTL": 4.20,
+    "ITC":        3.55,  "LT":         3.45,  "KOTAKBANK":  2.95,
+    "AXISBANK":   2.85,  "SBIN":       2.75,  "HINDUNILVR": 2.30,
+    "BAJFINANCE": 2.05,  "M&M":        1.95,  "MARUTI":     1.55,
+    "SUNPHARMA":  1.50,  "ULTRACEMCO": 1.35,  "HCLTECH":    1.30,
+    "TITAN":      1.25,  "BAJAJFINSV": 1.20,  "ASIANPAINT": 1.15,
+    "ADANIENT":   1.10,  "NTPC":       1.10,  "ONGC":       1.05,
+    "POWERGRID":  1.05,  "TATASTEEL":  1.00,  "TECHM":      0.95,
+    "WIPRO":      0.90,  "ADANIPORTS": 0.90,  "COALINDIA":  0.85,
+    "JSWSTEEL":   0.80,  "BAJAJ-AUTO": 0.80,  "GRASIM":     0.70,
+    "DRREDDY":    0.65,  "CIPLA":      0.65,  "EICHERMOT":  0.65,
+    "INDUSINDBK": 0.60,  "APOLLOHOSP": 0.55,  "TATACONSUM": 0.55,
+    "BEL":        0.50,  "SHRIRAMFIN": 0.45,  "HINDALCO":   0.75,
+    # New additions in your list:
+    "HDFCLIFE":   0.90,  "INDIGO":     0.70,  "JIOFIN":     0.85,
+    "MAXHEALTH":  0.55,  "SBILIFE":    0.85,  "TMPV":       0.60,
+    "TRENT":      0.95,  "ETERNAL":    0.95,
 }
 
-def fetch_nifty50(obj, nifty_ltp):
-    print("\n📋 Fetching Nifty 50 stocks...")
+def fetch_nifty50(obj, nifty_ltp, token_map):
+    print("\n📋 Fetching Nifty 50 stocks (using live token lookup)...")
     stocks = []
-    for sym, info in NIFTY50_STOCKS.items():
+    not_found = []
+
+    for sym, wt in NIFTY50_LIST.items():
+        info = token_map.get(sym)
+        if not info:
+            print(f"  ⚠️  {sym}: not found in instrument master — skipping")
+            not_found.append(sym)
+            stocks.append({"symbol": sym, "ltp": None, "chng": None, "pChng": None,
+                           "weight": wt, "contrib": None})
+            continue
+
         for attempt in range(3):
             try:
-                r = obj.ltpData("NSE", info["ts"], info["tok"])
+                r = obj.ltpData("NSE", info["tradingsymbol"], info["token"])
                 if r.get("status") and r.get("data"):
                     ltp   = float(r["data"].get("ltp",   0) or 0)
                     close = float(r["data"].get("close", ltp) or ltp)
                     chng  = round(ltp - close, 2)
                     pct   = round((chng / close) * 100, 2) if close else 0.0
-                    wt    = info["wt"]
-                    # Nifty point contribution = Nifty Level × (%Chg/100) × Weight%
                     contrib = round(nifty_ltp * (pct/100) * (wt/100), 2) if nifty_ltp else None
                     stocks.append({
                         "symbol": sym, "ltp": ltp, "chng": chng, "pChng": pct,
                         "weight": wt, "contrib": contrib
                     })
-                    print(f"  ✅ {sym}: {ltp}  {pct:+.2f}%  wt={wt}%  contrib={contrib:+.2f}pts" if contrib is not None else f"  ✅ {sym}: {ltp}  {pct:+.2f}%")
+                    print(f"  ✅ {sym}: {ltp}  {pct:+.2f}%" +
+                          (f"  contrib={contrib:+.2f}pts" if contrib is not None else ""))
                 else:
                     msg = r.get("message","")
                     if "rate" in msg.lower() and attempt < 2:
                         time.sleep(3); continue
                     stocks.append({"symbol": sym, "ltp": None, "chng": None, "pChng": None,
-                                   "weight": info["wt"], "contrib": None})
+                                   "weight": wt, "contrib": None})
                     print(f"  ⚠️  {sym}: {msg}")
                 break
             except Exception as e:
                 if "rate" in str(e).lower() and attempt < 2:
                     time.sleep(5); continue
                 stocks.append({"symbol": sym, "ltp": None, "chng": None, "pChng": None,
-                               "weight": info["wt"], "contrib": None})
+                               "weight": wt, "contrib": None})
                 print(f"  ❌ {sym}: {e}")
                 break
         time.sleep(0.8)
 
     filled = sum(1 for s in stocks if s["ltp"] is not None)
     print(f"\n  Result: {filled}/{len(stocks)} stocks with data")
+    if not_found:
+        print(f"  ⚠️  Not found in instrument master: {', '.join(not_found)}")
     return stocks
 
 # ── Build Excel ──────────────────────────────────────────────
@@ -243,7 +246,6 @@ def build_excel(label, ist_dt, indices, stocks):
                 cell.value="N/A"; cell.font=font(color="9E9E9E"); cell.fill=fill(bg)
             cell.border=brd(); cell.alignment=aln("center")
 
-    # All 50 stocks — now with WEIGHT and CONTRIBUTION (pts) columns
     sr = r + 3
     ws.merge_cells(f"A{sr}:G{sr}")
     sc(ws.cell(sr,1,f"📋  ALL NIFTY 50 STOCKS  [{len(stocks)} stocks]"),
@@ -276,10 +278,10 @@ def build_excel(label, ist_dt, indices, stocks):
             cell.font=font(bold=(col in (4,5,7)), color=color)
             cell.fill=fill(bg); cell.border=brd(); cell.alignment=aln("center")
 
-    # Top 7 positive/negative by % change — also show contribution
     valid = [s for s in stocks if s["pChng"] is not None]
-    top7p = sorted(valid, key=lambda x: x["pChng"], reverse=True)[:7]
-    top7n = sorted(valid, key=lambda x: x["pChng"])[:7]
+    contrib_valid = [s for s in stocks if s.get("contrib") is not None]
+    top7p = sorted(contrib_valid, key=lambda x: x["contrib"], reverse=True)[:7]
+    top7n = sorted(contrib_valid, key=lambda x: x["contrib"])[:7]
     trow  = r + 4
 
     for top7, col, title, hbg, tc, b1, b2 in [
@@ -318,7 +320,6 @@ def send_email(creds, xlsx_path, label, ist_dt, indices, stocks):
     disp    = label[:2]+":"+label[2:] if len(label)==4 else label
     subject = f"📊 NSE Snapshot {disp} IST — {ist_dt.strftime('%d %b %Y')}"
     valid   = [s for s in stocks if s["pChng"] is not None]
-    # Top movers by Nifty contribution (more meaningful than just %change for index impact)
     contrib_valid = [s for s in stocks if s.get("contrib") is not None]
     top3p = sorted(contrib_valid, key=lambda x: x["contrib"], reverse=True)[:3]
     top3n = sorted(contrib_valid, key=lambda x: x["contrib"])[:3]
@@ -483,14 +484,15 @@ def main():
     print(f"  NSE Snapshot — {disp} IST | {ist_dt.strftime('%d-%b-%Y')}")
     print(f"{'='*55}")
 
-    creds   = get_creds()
-    obj     = angel_login(creds)
-    indices = fetch_indices(obj)
+    creds      = get_creds()
+    obj        = angel_login(creds)
+    token_map  = load_token_map()
+    indices    = fetch_indices(obj)
 
     nifty_ltp = indices.get("NIFTY 50", {}).get("ltp") or 0
     print(f"\n  Nifty 50 LTP for contribution calc: {nifty_ltp}")
 
-    stocks  = fetch_nifty50(obj, nifty_ltp)
+    stocks  = fetch_nifty50(obj, nifty_ltp, token_map)
 
     print("\n📁 Building Excel...")
     wb = build_excel(label, ist_dt, indices, stocks)
