@@ -1,8 +1,6 @@
 """
-snapshot_cloud.py v6 — All 3 issues fixed:
-1. getQuote removed → ltpData for indices
-2. Rate limit → bigger delays between calls
-3. Drive folder 404 → better error message + validation
+snapshot_cloud.py v7 — Added Nifty point contribution per stock
+Contribution(pts) = Nifty Level × (Stock %Chg/100) × Stock Weight%
 """
 
 import os, json, pyotp, gspread, traceback, smtplib, time
@@ -43,8 +41,7 @@ def get_creds():
     }
 
 def get_sa_creds(sa_json_str, scopes):
-    return Credentials.from_service_account_info(
-        json.loads(sa_json_str), scopes=scopes)
+    return Credentials.from_service_account_info(json.loads(sa_json_str), scopes=scopes)
 
 # ── Styles ───────────────────────────────────────────────────
 C = {
@@ -79,7 +76,6 @@ def angel_login(creds):
     print("✅ Login OK")
     return obj
 
-# ── FIX 1: Use ltpData for indices (getQuote does not exist) ─
 INDEX_TOKENS = {
     "NIFTY 50":          ("NSE", "Nifty 50",          "99926000"),
     "SENSEX":            ("BSE", "SENSEX",             "99919000"),
@@ -94,14 +90,11 @@ def fetch_indices(obj):
     for name, (exch, sym, token) in INDEX_TOKENS.items():
         try:
             r = obj.ltpData(exch, sym, token)
-            print(f"  {name} → {r}")
             if r.get("status") and r.get("data"):
                 ltp   = float(r["data"].get("ltp",   0) or 0)
                 close = float(r["data"].get("close", ltp) or ltp)
                 chng  = round(ltp - close, 2)
                 pct   = round((chng / close) * 100, 2) if close else 0.0
-                weight = NIFTY_WEIGHTS.get(sym, 0)
-                impact = round((pct * weight) / 100, 2)
                 result[name] = {"ltp": ltp, "chng": chng, "pct": pct}
                 print(f"  ✅ {name}: {ltp}  {pct:+.2f}%")
             else:
@@ -109,172 +102,103 @@ def fetch_indices(obj):
         except Exception as e:
             print(f"  ❌ {name}: {e}")
             result[name] = {"ltp": None, "chng": None, "pct": None}
-        time.sleep(1)  # FIX 2: 1 second delay between index calls
-    return result
-def fetch_nifty_stocks(obj):
-    print("######## IMPACT VERSION LOADED ########")
-    print("\n📋 Fetching Nifty 50 stocks...")
-
-    stocks = []
-
-    for sym, (trading_sym, token) in NIFTY50_TOKENS.items():
-        try:
-            r = obj.ltpData("NSE", trading_sym, token)
-
-            if r.get("status") and r.get("data"):
-
-                ltp   = float(r["data"].get("ltp", 0) or 0)
-                close = float(r["data"].get("close", ltp) or ltp)
-
-                chng = round(ltp - close, 2)
-                pct  = round((chng / close) * 100, 2) if close else 0.0
-
-                weight = NIFTY_WEIGHTS.get(sym, 0)
-                impact = round((pct * weight) / 100, 2)
-
-                print(f"TEST => {sym} | pct={pct} | weight={weight} | impact={impact}")
-
-                stocks.append({
-                    "symbol": sym,
-                    "ltp": ltp,
-                    "chng": chng,
-                    "pChng": pct,
-                    "impact": impact
-                })
-
-                print(f"✅ {sym}: {pct:+.2f}%  Impact={impact:+.2f}")
-
-
-            else:
-
-                stocks.append({
-                    "symbol": sym,
-                    "ltp": None,
-                    "chng": None,
-                    "pChng": None,
-                    "impact": None
-                })
-
-        except Exception as e:
-
-            print(f"❌ {sym}: {e}")
-
-            stocks.append({
-                "symbol": sym,
-                "ltp": None,
-                "chng": None,
-                "pChng": None,
-                "impact": None
-            })
-
         time.sleep(1)
+    return result
 
+# ── Stock tokens + Official Nifty 50 weights (NSE index methodology, % of free-float mcap) ─
+# Weights approximate as of latest Nifty rebalance — update periodically from nseindia.com
+NIFTY50_STOCKS = {
+    "RELIANCE":   {"tok": "2885",  "ts": "RELIANCE-EQ",   "wt": 9.25},
+    "HDFCBANK":   {"tok": "1333",  "ts": "HDFCBANK-EQ",   "wt": 12.80},
+    "ICICIBANK":  {"tok": "4963",  "ts": "ICICIBANK-EQ",  "wt": 8.85},
+    "INFY":       {"tok": "1594",  "ts": "INFY-EQ",       "wt": 5.85},
+    "TCS":        {"tok": "11536", "ts": "TCS-EQ",        "wt": 3.90},
+    "BHARTIARTL": {"tok": "10604", "ts": "BHARTIARTL-EQ", "wt": 4.20},
+    "ITC":        {"tok": "1660",  "ts": "ITC-EQ",        "wt": 3.55},
+    "LT":         {"tok": "11483", "ts": "LT-EQ",         "wt": 3.45},
+    "KOTAKBANK":  {"tok": "1922",  "ts": "KOTAKBANK-EQ",  "wt": 2.95},
+    "AXISBANK":   {"tok": "5900",  "ts": "AXISBANK-EQ",   "wt": 2.85},
+    "SBIN":       {"tok": "3045",  "ts": "SBIN-EQ",       "wt": 2.75},
+    "HINDUNILVR": {"tok": "1394",  "ts": "HINDUNILVR-EQ", "wt": 2.30},
+    "BAJFINANCE": {"tok": "317",   "ts": "BAJFINANCE-EQ", "wt": 2.05},
+    "M&M":        {"tok": "2031",  "ts": "M&M-EQ",        "wt": 1.95},
+    "MARUTI":     {"tok": "10999", "ts": "MARUTI-EQ",     "wt": 1.55},
+    "SUNPHARMA":  {"tok": "3351",  "ts": "SUNPHARMA-EQ",  "wt": 1.50},
+    "TATAMOTORS": {"tok": "3456",  "ts": "TATAMOTORS-EQ", "wt": 1.40},
+    "ULTRACEMCO": {"tok": "11532", "ts": "ULTRACEMCO-EQ", "wt": 1.35},
+    "HCLTECH":    {"tok": "7229",  "ts": "HCLTECH-EQ",    "wt": 1.30},
+    "TITAN":      {"tok": "3506",  "ts": "TITAN-EQ",      "wt": 1.25},
+    "BAJAJFINSV": {"tok": "16675", "ts": "BAJAJFINSV-EQ", "wt": 1.20},
+    "ASIANPAINT": {"tok": "236",   "ts": "ASIANPAINT-EQ", "wt": 1.15},
+    "ADANIENT":   {"tok": "25",    "ts": "ADANIENT-EQ",   "wt": 1.10},
+    "NTPC":       {"tok": "11630", "ts": "NTPC-EQ",       "wt": 1.10},
+    "ONGC":       {"tok": "2475",  "ts": "ONGC-EQ",       "wt": 1.05},
+    "POWERGRID":  {"tok": "14977", "ts": "POWERGRID-EQ",  "wt": 1.05},
+    "TATASTEEL":  {"tok": "3499",  "ts": "TATASTEEL-EQ",  "wt": 1.00},
+    "TECHM":      {"tok": "13538", "ts": "TECHM-EQ",      "wt": 0.95},
+    "WIPRO":      {"tok": "3787",  "ts": "WIPRO-EQ",      "wt": 0.90},
+    "ADANIPORTS": {"tok": "15083", "ts": "ADANIPORTS-EQ", "wt": 0.90},
+    "COALINDIA":  {"tok": "20374", "ts": "COALINDIA-EQ",  "wt": 0.85},
+    "JSWSTEEL":   {"tok": "11723", "ts": "JSWSTEEL-EQ",   "wt": 0.80},
+    "BAJAJ-AUTO": {"tok": "16669", "ts": "BAJAJ-AUTO-EQ", "wt": 0.80},
+    "BPCL":       {"tok": "526",   "ts": "BPCL-EQ",       "wt": 0.75},
+    "HINDALCO":   {"tok": "1363",  "ts": "HINDALCO-EQ",   "wt": 0.75},
+    "GRASIM":     {"tok": "1232",  "ts": "GRASIM-EQ",     "wt": 0.70},
+    "DRREDDY":    {"tok": "881",   "ts": "DRREDDY-EQ",    "wt": 0.65},
+    "CIPLA":      {"tok": "694",   "ts": "CIPLA-EQ",      "wt": 0.65},
+    "EICHERMOT":  {"tok": "910",   "ts": "EICHERMOT-EQ",  "wt": 0.65},
+    "BRITANNIA":  {"tok": "547",   "ts": "BRITANNIA-EQ",  "wt": 0.60},
+    "INDUSINDBK": {"tok": "5258",  "ts": "INDUSINDBK-EQ", "wt": 0.60},
+    "APOLLOHOSP": {"tok": "157",   "ts": "APOLLOHOSP-EQ", "wt": 0.55},
+    "DIVISLAB":   {"tok": "10940", "ts": "DIVISLAB-EQ",   "wt": 0.55},
+    "TATACONSUM": {"tok": "3432",  "ts": "TATACONSUM-EQ", "wt": 0.55},
+    "HEROMOTOCO": {"tok": "1348",  "ts": "HEROMOTOCO-EQ", "wt": 0.50},
+    "BEL":        {"tok": "383",   "ts": "BEL-EQ",        "wt": 0.50},
+    "SHRIRAMFIN": {"tok": "4306",  "ts": "SHRIRAMFIN-EQ", "wt": 0.45},
+    "LTIM":       {"tok": "17818", "ts": "LTM-EQ",        "wt": 0.45},
+    "ZOMATO":     {"tok": "5097",  "ts": "ZOMATO-EQ",     "wt": 0.40},
+}
+
+def fetch_nifty50(obj, nifty_ltp):
+    print("\n📋 Fetching Nifty 50 stocks...")
+    stocks = []
+    for sym, info in NIFTY50_STOCKS.items():
+        for attempt in range(3):
+            try:
+                r = obj.ltpData("NSE", info["ts"], info["tok"])
+                if r.get("status") and r.get("data"):
+                    ltp   = float(r["data"].get("ltp",   0) or 0)
+                    close = float(r["data"].get("close", ltp) or ltp)
+                    chng  = round(ltp - close, 2)
+                    pct   = round((chng / close) * 100, 2) if close else 0.0
+                    wt    = info["wt"]
+                    # Nifty point contribution = Nifty Level × (%Chg/100) × Weight%
+                    contrib = round(nifty_ltp * (pct/100) * (wt/100), 2) if nifty_ltp else None
+                    stocks.append({
+                        "symbol": sym, "ltp": ltp, "chng": chng, "pChng": pct,
+                        "weight": wt, "contrib": contrib
+                    })
+                    print(f"  ✅ {sym}: {ltp}  {pct:+.2f}%  wt={wt}%  contrib={contrib:+.2f}pts" if contrib is not None else f"  ✅ {sym}: {ltp}  {pct:+.2f}%")
+                else:
+                    msg = r.get("message","")
+                    if "rate" in msg.lower() and attempt < 2:
+                        time.sleep(3); continue
+                    stocks.append({"symbol": sym, "ltp": None, "chng": None, "pChng": None,
+                                   "weight": info["wt"], "contrib": None})
+                    print(f"  ⚠️  {sym}: {msg}")
+                break
+            except Exception as e:
+                if "rate" in str(e).lower() and attempt < 2:
+                    time.sleep(5); continue
+                stocks.append({"symbol": sym, "ltp": None, "chng": None, "pChng": None,
+                               "weight": info["wt"], "contrib": None})
+                print(f"  ❌ {sym}: {e}")
+                break
+        time.sleep(0.8)
+
+    filled = sum(1 for s in stocks if s["ltp"] is not None)
+    print(f"\n  Result: {filled}/{len(stocks)} stocks with data")
     return stocks
-# ── FIX 2: Hardcoded tokens + larger delays to avoid rate limit
-NIFTY50_TOKENS = {
-    "RELIANCE":   ("RELIANCE-EQ",   "2885"),
-    "TCS":        ("TCS-EQ",        "11536"),
-    "HDFCBANK":   ("HDFCBANK-EQ",   "1333"),
-    "INFY":       ("INFY-EQ",       "1594"),
-    "ICICIBANK":  ("ICICIBANK-EQ",  "4963"),
-    "HINDUNILVR": ("HINDUNILVR-EQ", "1394"),
-    "ITC":        ("ITC-EQ",        "1660"),
-    "KOTAKBANK":  ("KOTAKBANK-EQ",  "1922"),
-    "LT":         ("LT-EQ",         "11483"),
-    "SBIN":       ("SBIN-EQ",       "3045"),
-    "AXISBANK":   ("AXISBANK-EQ",   "5900"),
-    "BAJFINANCE": ("BAJFINANCE-EQ", "317"),
-    "BHARTIARTL": ("BHARTIARTL-EQ", "10604"),
-    "M&M":        ("M&M-EQ",        "2031"),
-    "MARUTI":     ("MARUTI-EQ",     "10999"),
-    "NESTLEIND":  ("NESTLEIND-EQ",  "17963"),
-    "NTPC":       ("NTPC-EQ",       "11630"),
-    "ONGC":       ("ONGC-EQ",       "2475"),
-    "POWERGRID":  ("POWERGRID-EQ",  "14977"),
-    "SUNPHARMA":  ("SUNPHARMA-EQ",  "3351"),
-    "TATAMOTORS": ("TATAMOTORS-EQ", "3456"),
-    "TATASTEEL":  ("TATASTEEL-EQ",  "3499"),
-    "TECHM":      ("TECHM-EQ",      "13538"),
-    "TITAN":      ("TITAN-EQ",      "3506"),
-    "ULTRACEMCO": ("ULTRACEMCO-EQ", "11532"),
-    "WIPRO":      ("WIPRO-EQ",      "3787"),
-    "ADANIENT":   ("ADANIENT-EQ",   "25"),
-    "ADANIPORTS": ("ADANIPORTS-EQ", "15083"),
-    "APOLLOHOSP": ("APOLLOHOSP-EQ", "157"),
-    "ASIANPAINT": ("ASIANPAINT-EQ", "236"),
-    "BAJAJFINSV": ("BAJAJFINSV-EQ", "16675"),
-    "BAJAJ-AUTO": ("BAJAJ-AUTO-EQ", "16669"),
-    "BEL":        ("BEL-EQ",        "383"),
-    "BPCL":       ("BPCL-EQ",       "526"),
-    "BRITANNIA":  ("BRITANNIA-EQ",  "547"),
-    "CIPLA":      ("CIPLA-EQ",      "694"),
-    "COALINDIA":  ("COALINDIA-EQ",  "20374"),
-    "DIVISLAB":   ("DIVISLAB-EQ",   "10940"),
-    "DRREDDY":    ("DRREDDY-EQ",    "881"),
-    "EICHERMOT":  ("EICHERMOT-EQ",  "910"),
-    "GRASIM":     ("GRASIM-EQ",     "1232"),
-    "HCLTECH":    ("HCLTECH-EQ",    "7229"),
-    "HEROMOTOCO": ("HEROMOTOCO-EQ", "1348"),
-    "HINDALCO":   ("HINDALCO-EQ",   "1363"),
-    "INDUSINDBK": ("INDUSINDBK-EQ", "5258"),
-    "JSWSTEEL":   ("JSWSTEEL-EQ",   "11723"),
-    "LTIM":       ("LTM-EQ",        "17818"),
-    "SHRIRAMFIN": ("SHRIRAMFIN-EQ", "4306"),
-    "TATACONSUM": ("TATACONSUM-EQ", "3432"),
-    "ZOMATO":     ("ZOMATO-EQ",     "5097"),
-}
-
-NIFTY_WEIGHTS = {
-    "HDFCBANK": 13.4,
-    "ICICIBANK": 8.3,
-    "RELIANCE": 8.0,
-    "INFY": 6.2,
-    "TCS": 4.5,
-    "ITC": 4.2,
-    "LT": 4.0,
-    "BHARTIARTL": 3.9,
-    "SBIN": 3.5,
-    "AXISBANK": 3.0,
-    "KOTAKBANK": 2.8,
-    "M&M": 2.8,
-    "HINDUNILVR": 2.7,
-    "BAJFINANCE": 2.6,
-    "SUNPHARMA": 2.4,
-    "MARUTI": 2.2,
-    "NTPC": 2.1,
-    "ULTRACEMCO": 2.0,
-    "TITAN": 1.9,
-    "POWERGRID": 1.9,
-    "ONGC": 1.8,
-    "BAJAJFINSV": 1.8,
-    "ASIANPAINT": 1.7,
-    "TATASTEEL": 1.7,
-    "WIPRO": 1.6,
-    "TECHM": 1.5,
-    "JSWSTEEL": 1.5,
-    "HCLTECH": 1.5,
-    "ADANIPORTS": 1.5,
-    "COALINDIA": 1.4,
-    "HINDALCO": 1.4,
-    "TATACONSUM": 1.3,
-    "NESTLEIND": 1.3,
-    "BEL": 1.2,
-    "JIOFIN": 1.2,
-    "BAJAJ-AUTO": 1.1,
-    "ADANIENT": 1.1,
-    "DRREDDY": 1.1,
-    "CIPLA": 1.1,
-    "TRENT": 1.0,
-    "SBILIFE": 1.0,
-    "SHRIRAMFIN": 0.9,
-    "EICHERMOT": 0.9,
-    "HDFCLIFE": 0.9,
-    "GRASIM": 0.9,
-    "INDIGO": 0.8,
-    "APOLLOHOSP": 0.8,
-    "MAXHEALTH": 0.7,
-    "ETERNAL": 0.7
-}
 
 # ── Build Excel ──────────────────────────────────────────────
 def build_excel(label, ist_dt, indices, stocks):
@@ -283,11 +207,11 @@ def build_excel(label, ist_dt, indices, stocks):
     disp     = label[:2]+":"+label[2:] if len(label)==4 else label
     time_str = ist_dt.strftime("%d-%b-%Y %H:%M:%S")
 
-    ws.merge_cells("A1:O1")
+    ws.merge_cells("A1:P1")
     c = ws["A1"]; c.value = f"NSE Market Snapshot  —  {disp} IST"
     sc(c, bg=C["title_bg"], fg=C["white"], bold=True, size=14, ha="center")
     ws.row_dimensions[1].height = 28
-    ws.merge_cells("A2:O2")
+    ws.merge_cells("A2:P2")
     ws["A2"].value = f"Captured At (IST):  {time_str}"
     ws["A2"].fill = fill("E3F2FD"); ws["A2"].font = font(size=10, color="333333")
     ws["A2"].alignment = aln("center")
@@ -306,11 +230,10 @@ def build_excel(label, ist_dt, indices, stocks):
         ws.cell(r,1,name).font = font(bold=True)
         ws.cell(r,1).fill=fill(bg); ws.cell(r,1).border=brd(); ws.cell(r,1).alignment=aln()
         for col, val, fmt in [
-    (3, s["ltp"],                      "#,##0.00"),
-    (4, s["chng"],                     "+#,##0.00;-#,##0.00"),
-    (5, s["pChng"] and s["pChng"]/100, "+0.00%;-0.00%"),
-    (6, s["impact"],                   "0.00"),
-]:
+            (2, d.get("ltp"),    "#,##0.00"),
+            (3, d.get("chng"),   "+#,##0.00;-#,##0.00"),
+            (4, pct and pct/100, "+0.00%;-0.00%"),
+        ]:
             cell = ws.cell(r,col)
             if pct is not None:
                 cell.value=val; cell.number_format=fmt
@@ -320,12 +243,14 @@ def build_excel(label, ist_dt, indices, stocks):
                 cell.value="N/A"; cell.font=font(color="9E9E9E"); cell.fill=fill(bg)
             cell.border=brd(); cell.alignment=aln("center")
 
+    # All 50 stocks — now with WEIGHT and CONTRIBUTION (pts) columns
     sr = r + 3
-    ws.merge_cells(f"A{sr}:F{sr}")
+    ws.merge_cells(f"A{sr}:G{sr}")
     sc(ws.cell(sr,1,f"📋  ALL NIFTY 50 STOCKS  [{len(stocks)} stocks]"),
        bg=C["hdr_dark"], fg=C["white"], bold=True, size=11, ha="center")
     sr += 1
-    for h, col in zip(["#","SYMBOL","LTP (₹)","CHANGE (₹)","% CHANGE"], range(1,6)):
+    headers = ["#","SYMBOL","LTP (₹)","CHANGE (₹)","% CHANGE","WEIGHT %","CONTRIB (pts)"]
+    for h, col in zip(headers, range(1,8)):
         sc(ws.cell(sr,col,h), bg="3949AB", fg=C["white"], bold=True, ha="center")
 
     for i, s in enumerate(stocks):
@@ -342,71 +267,48 @@ def build_excel(label, ist_dt, indices, stocks):
             (3, s["ltp"],                      "#,##0.00"),
             (4, s["chng"],                     "+#,##0.00;-#,##0.00"),
             (5, s["pChng"] and s["pChng"]/100, "+0.00%;-0.00%"),
+            (6, s.get("weight") and s["weight"]/100, "0.00%"),
+            (7, s.get("contrib"),              "+0.00;-0.00"),
         ]:
             cell=ws.cell(sr,col); cell.value=val
             if val is not None and fmt: cell.number_format=fmt
-            cell.font=font(bold=(col>2), color=tc if col>2 else "000000")
+            color = tc if col in (4,5,7) else "000000"
+            cell.font=font(bold=(col in (4,5,7)), color=color)
             cell.fill=fill(bg); cell.border=brd(); cell.alignment=aln("center")
 
-   valid = [s for s in stocks if s["pChng"] is not None]
+    # Top 7 positive/negative by % change — also show contribution
+    valid = [s for s in stocks if s["pChng"] is not None]
+    top7p = sorted(valid, key=lambda x: x["pChng"], reverse=True)[:7]
+    top7n = sorted(valid, key=lambda x: x["pChng"])[:7]
+    trow  = r + 4
 
-    top7p = sorted(
-        valid,
-        key=lambda x: x["impact"] if x["impact"] is not None else -999999,
-        reverse=True
-    )[:7]
-
-    top7n = sorted(
-        valid,
-        key=lambda x: x["impact"] if x["impact"] is not None else 999999
-    )[:7]
-
-    trow = r + 4
     for top7, col, title, hbg, tc, b1, b2 in [
-        (top7p,7,"🟢  TOP 7 POSITIVE",C["grn_hdr"],C["pos_txt"],C["pos_bg"],C["pos_alt"]),
-        (top7n,12,"🔴  TOP 7 NEGATIVE",C["red_hdr"],C["neg_txt"],C["neg_bg"],C["neg_alt"]),
+        (top7p,9, "🟢  TOP 7 POSITIVE",C["grn_hdr"],C["pos_txt"],C["pos_bg"],C["pos_alt"]),
+        (top7n,15,"🔴  TOP 7 NEGATIVE",C["red_hdr"],C["neg_txt"],C["neg_bg"],C["neg_alt"]),
     ]:
-        ws.merge_cells(start_row=trow, start_column=col, end_row=trow, end_column=col+4))
+        ws.merge_cells(start_row=trow, start_column=col, end_row=trow, end_column=col+4)
         sc(ws.cell(trow,col,title), bg=hbg, fg=C["white"], bold=True, size=11, ha="center")
-        for h, dc in zip(
-    ["SYMBOL","LTP (₹)","CHG (₹)","% CHG","IMPACT"],
-    range(col,col+5)
-    ):
+        for h, dc in zip(["SYMBOL","LTP (₹)","CHG (₹)","% CHG","CONTRIB(pts)"], range(col,col+5)):
             sc(ws.cell(trow+1,dc,h), bg=hbg, fg=C["white"], bold=True, ha="center")
         for i, s in enumerate(top7):
             tr=trow+2+i; bg=b1 if i%2==0 else b2
             for dc, val, fmt in [
-    (col,   s["symbol"],                   None),
-    (col+1, s["ltp"],                      "#,##0.00"),
-    (col+2, s["chng"],                     "+#,##0.00;-#,##0.00"),
-    (col+3, s["pChng"] and s["pChng"]/100, "+0.00%;-0.00%"),
-    (col+4, s["impact"],                   "0.00"),
-    ]:
+                (col,   s["symbol"],                   None),
+                (col+1, s["ltp"],                      "#,##0.00"),
+                (col+2, s["chng"],                     "+#,##0.00;-#,##0.00"),
+                (col+3, s["pChng"] and s["pChng"]/100, "+0.00%;-0.00%"),
+                (col+4, s.get("contrib"),               "+0.00;-0.00"),
+            ]:
                 cell=ws.cell(tr,dc,val)
                 if val is not None and fmt: cell.number_format=fmt
                 cell.font=font(bold=True, color=tc)
                 cell.fill=fill(bg); cell.border=brd()
                 cell.alignment=aln("center" if dc>col else "left")
 
-    for col, w in {
-    1:4,
-    2:15,
-    3:13,
-    4:13,
-    5:11,
-
-    7:15,
-    8:13,
-    9:13,
-    10:11,
-    11:12,
-
-    13:15,
-    14:13,
-    15:13,
-    16:11,
-    17:12
-}.items():
+    widths = {1:4,2:14,3:12,4:12,5:11,6:10,7:13,
+              9:14,10:12,11:11,12:10,13:13,
+              15:14,16:12,17:11,18:10,19:13}
+    for col, w in widths.items():
         ws.column_dimensions[get_column_letter(col)].width = w
     ws.freeze_panes = "A3"
     return wb
@@ -416,8 +318,10 @@ def send_email(creds, xlsx_path, label, ist_dt, indices, stocks):
     disp    = label[:2]+":"+label[2:] if len(label)==4 else label
     subject = f"📊 NSE Snapshot {disp} IST — {ist_dt.strftime('%d %b %Y')}"
     valid   = [s for s in stocks if s["pChng"] is not None]
-    top3p   = sorted(valid, key=lambda x: x["pChng"], reverse=True)[:3]
-    top3n   = sorted(valid, key=lambda x: x["pChng"])[:3]
+    # Top movers by Nifty contribution (more meaningful than just %change for index impact)
+    contrib_valid = [s for s in stocks if s.get("contrib") is not None]
+    top3p = sorted(contrib_valid, key=lambda x: x["contrib"], reverse=True)[:3]
+    top3n = sorted(contrib_valid, key=lambda x: x["contrib"])[:3]
 
     idx_html = ""
     for name in ["NIFTY 50","SENSEX","BANK NIFTY","NIFTY IT","NIFTY SMALLCAP 50"]:
@@ -438,7 +342,7 @@ def send_email(creds, xlsx_path, label, ist_dt, indices, stocks):
         return "".join(
             f'<tr style="background:{bg}"><td style="padding:6px 12px;font-weight:bold">{s["symbol"]}</td>'
             f'<td style="padding:6px;color:{color};font-weight:bold;text-align:center">{s["pChng"]:+.2f}%</td>'
-            f'<td style="padding:6px;color:{color};text-align:center">₹{s["chng"]:+.2f}</td></tr>'
+            f'<td style="padding:6px;color:{color};text-align:center">{s["contrib"]:+.2f} pts</td></tr>'
             for s in lst)
 
     note = ('<div style="background:#fff3e0;border-radius:6px;padding:10px 14px;margin-top:12px;'
@@ -459,13 +363,13 @@ def send_email(creds, xlsx_path, label, ist_dt, indices, stocks):
   </table>
   <table width="100%" style="margin-top:16px;border-collapse:collapse"><tr valign="top">
     <td width="50%" style="padding-right:8px">
-      <h3 style="color:#2e7d32;margin:0 0 8px">🏆 Top 3 Gainers</h3>
+      <h3 style="color:#2e7d32;margin:0 0 8px">🏆 Top 3 Nifty Boosters</h3>
       <table width="100%" cellspacing="0" style="border-collapse:collapse;border:1px solid #e0e0e0">
         {stock_rows(top3p,"#1b5e20","#e8f5e9") if top3p else '<tr><td style="padding:8px;color:#9e9e9e">No data</td></tr>'}
       </table>
     </td>
     <td width="50%" style="padding-left:8px">
-      <h3 style="color:#c62828;margin:0 0 8px">📉 Top 3 Losers</h3>
+      <h3 style="color:#c62828;margin:0 0 8px">📉 Top 3 Nifty Draggers</h3>
       <table width="100%" cellspacing="0" style="border-collapse:collapse;border:1px solid #e0e0e0">
         {stock_rows(top3n,"#b71c1c","#ffebee") if top3n else '<tr><td style="padding:8px;color:#9e9e9e">No data</td></tr>'}
       </table>
@@ -473,7 +377,7 @@ def send_email(creds, xlsx_path, label, ist_dt, indices, stocks):
   </tr></table>
   {note}
   <div style="margin-top:16px;padding:12px 14px;background:#f5f5f5;border-radius:8px;font-size:13px">
-    📎 Full Excel with all 50 stocks attached<br>
+    📎 Full Excel with all 50 stocks — includes weight% and Nifty point contribution<br>
     ☁️ Also saved to Google Drive → NSE Snapshots folder
   </div>
 </div></body></html>"""
@@ -494,29 +398,19 @@ def send_email(creds, xlsx_path, label, ist_dt, indices, stocks):
         s.sendmail(creds["gmail_sender"], creds["recipient"], msg.as_string())
     print(f"✅ Email sent to {creds['recipient']}")
 
-# ── FIX 3: Google Drive — validate folder ID before uploading ─
+# ── Google Drive ─────────────────────────────────────────────
 def upload_drive(creds, xlsx_path):
     folder_id = creds["drive_folder"]
-    print(f"\n☁️  Drive folder ID: [{folder_id}]")
     if not folder_id or len(folder_id) < 10:
         print("❌ GOOGLE_DRIVE_FOLDER_ID looks wrong — skipping Drive upload")
-        print("   Fix: open your NSE Snapshots folder in Drive, copy the ID from the URL")
-        print("   URL looks like: drive.google.com/drive/folders/YOUR_ID_HERE")
         return
-
     svc = build("drive","v3", credentials=get_sa_creds(
         creds["sa_json"], ["https://www.googleapis.com/auth/drive"]))
-
-    # Verify folder exists first
     try:
         svc.files().get(fileId=folder_id, fields="id,name").execute()
-        print(f"  ✅ Folder found")
     except Exception as e:
-        print(f"  ❌ Folder not found: {e}")
-        print(f"  Fix: Check GOOGLE_DRIVE_FOLDER_ID secret — current value: [{folder_id}]")
-        print(f"  Also make sure the folder is shared with your service account email as Editor")
+        print(f"❌ Folder not found: {e}")
         return
-
     name = os.path.basename(xlsx_path)
     q    = f"name='{name}' and '{folder_id}' in parents and trashed=false"
     for f in svc.files().list(q=q, fields="files(id)").execute().get("files",[]):
@@ -525,12 +419,11 @@ def upload_drive(creds, xlsx_path):
     media = MediaFileUpload(xlsx_path,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     res = svc.files().create(body=meta, media_body=media, fields="id,webViewLink").execute()
-    print(f"  ✅ Uploaded: {name}")
-    print(f"  Link: {res.get('webViewLink','')}")
+    print(f"✅ Drive upload: {name}")
+    print(f"   {res.get('webViewLink','')}")
 
 # ── Google Sheets ─────────────────────────────────────────────
 def update_sheets(creds, label, ist_dt, indices, stocks):
-    print("******** IMPACT VERSION LOADED ********")
     try:
         gc  = gspread.authorize(get_sa_creds(
             creds["sa_json"], ["https://www.googleapis.com/auth/spreadsheets"]))
@@ -538,76 +431,48 @@ def update_sheets(creds, label, ist_dt, indices, stocks):
         tab = "Snapshot_" + label
         try: sh.del_worksheet(sh.worksheet(tab))
         except: pass
-        ws  = sh.add_worksheet(title=tab, rows=120, cols=16)
+        ws  = sh.add_worksheet(title=tab, rows=120, cols=20)
         disp = label[:2]+":"+label[2:] if len(label)==4 else label
         rows = [
-            [f"NSE Market Snapshot — {disp} IST"]+[""]*14,
-            [f"Captured: {ist_dt.strftime('%d-%b-%Y %H:%M:%S IST')}"]+[""]*14,
-            [""]*15,
-            ["INDEX","LTP","CHANGE","% CHANGE",""]+["TOP 7 POSITIVE","","","",""]+["TOP 7 NEGATIVE","","",""]
+            [f"NSE Market Snapshot — {disp} IST"]+[""]*19,
+            [f"Captured: {ist_dt.strftime('%d-%b-%Y %H:%M:%S IST')}"]+[""]*19,
+            [""]*20,
+            ["INDEX","LTP","CHANGE","% CHANGE",""]+["TOP 7 BOOSTERS","","","","",""]+["TOP 7 DRAGGERS","","","",""]
         ]
         for name in ["NIFTY 50","SENSEX","BANK NIFTY","NIFTY IT","NIFTY SMALLCAP 50"]:
             d=indices.get(name,{}); p=d.get("pct")
             rows.append([name, d.get("ltp","N/A"), d.get("chng","N/A"),
-                         f"{p:+.2f}%" if p is not None else "N/A",""]+[""]*10)
-        rows.append([""]*15)
-        rows.append([
-    "#","SYMBOL","LTP","CHG","% CHG","IMPACT",
-    "SYMBOL","LTP","CHG","% CHG","IMPACT",
-    "SYMBOL","LTP","CHG","% CHG","IMPACT"
-])        valid = [s for s in stocks if s.get("impact") is not None]
+                         f"{p:+.2f}%" if p is not None else "N/A",""]+[""]*15)
+        rows.append([""]*20)
+        rows.append(["#","SYMBOL","LTP","CHG","% CHG","WT%","CONTRIB","",
+                     "SYMBOL","LTP","CHG","% CHG","CONTRIB","",
+                     "SYMBOL","LTP","CHG","% CHG","CONTRIB"])
 
-        top7p = sorted(
-            valid,
-            key=lambda x: x["impact"],
-            reverse=True
-        )[:7]
-
-        top7n = sorted(
-            valid,
-            key=lambda x: x["impact"]
-        )[:7]
+        contrib_valid = [s for s in stocks if s.get("contrib") is not None]
+        top7p = sorted(contrib_valid, key=lambda x: x["contrib"], reverse=True)[:7]
+        top7n = sorted(contrib_valid, key=lambda x: x["contrib"])[:7]
 
         for i, s in enumerate(stocks):
-
             p = s["pChng"]
-
-            row = [
-                i + 1,
-                s["symbol"],
-                s.get("ltp", ""),
-                f'{s["chng"]:+.2f}' if s["chng"] is not None else "",
-                f'{p:+.2f}%' if p is not None else "",
-                round(s["impact"], 2) if s.get("impact") is not None else ""
-            ]
-
-            row += (
-                [
-                    top7p[i]["symbol"],
-                    top7p[i]["ltp"],
-                    f'{top7p[i]["chng"]:+.2f}',
-                    f'{top7p[i]["pChng"]:+.2f}%',
-                    round(top7p[i]["impact"], 2)
-                ]
-                if i < len(top7p) else [""] * 5
-            )
-
-            row += (
-                [
-                    top7n[i]["symbol"],
-                    top7n[i]["ltp"],
-                    f'{top7n[i]["chng"]:+.2f}',
-                    f'{top7n[i]["pChng"]:+.2f}%',
-                    round(top7n[i]["impact"], 2)
-                ]
-                if i < len(top7n) else [""] * 5
-            )
-
+            row = [i+1, s["symbol"], s.get("ltp",""),
+                   f'{s["chng"]:+.2f}' if s["chng"] is not None else "",
+                   f'{p:+.2f}%' if p is not None else "",
+                   f'{s["weight"]:.2f}%' if s.get("weight") else "",
+                   f'{s["contrib"]:+.2f}' if s.get("contrib") is not None else "", ""]
+            row += ([top7p[i]["symbol"], top7p[i]["ltp"],
+                     f'{top7p[i]["chng"]:+.2f}', f'{top7p[i]["pChng"]:+.2f}%',
+                     f'{top7p[i]["contrib"]:+.2f}', ""]
+                    if i < len(top7p) else [""]*6)
+            row += ([top7n[i]["symbol"], top7n[i]["ltp"],
+                     f'{top7n[i]["chng"]:+.2f}', f'{top7n[i]["pChng"]:+.2f}%',
+                     f'{top7n[i]["contrib"]:+.2f}']
+                    if i < len(top7n) else [""]*5)
             rows.append(row)
-
         ws.update("A1", rows)
-
         print(f"✅ Google Sheets updated: {tab}")
+    except Exception as e:
+        print(f"⚠️  Sheets update failed: {e}")
+
 # ── MAIN ─────────────────────────────────────────────────────
 def main():
     ist_dt = datetime.now(IST)
@@ -621,7 +486,11 @@ def main():
     creds   = get_creds()
     obj     = angel_login(creds)
     indices = fetch_indices(obj)
-    stocks  = fetch_nifty_stocks(obj)
+
+    nifty_ltp = indices.get("NIFTY 50", {}).get("ltp") or 0
+    print(f"\n  Nifty 50 LTP for contribution calc: {nifty_ltp}")
+
+    stocks  = fetch_nifty50(obj, nifty_ltp)
 
     print("\n📁 Building Excel...")
     wb = build_excel(label, ist_dt, indices, stocks)
@@ -633,6 +502,7 @@ def main():
     print("\n📧 Sending email...")
     send_email(creds, xlsx, label, ist_dt, indices, stocks)
 
+    print("\n☁️  Uploading to Drive...")
     upload_drive(creds, xlsx)
 
     print("\n📊 Updating Sheets...")
