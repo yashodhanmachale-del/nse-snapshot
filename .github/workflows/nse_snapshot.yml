@@ -1,6 +1,6 @@
 name: NSE Market Snapshot
-
 on:
+  workflow_dispatch:
   schedule:
     - cron: "45 3 * * 1-5"
     - cron: "50 3 * * 1-5"
@@ -10,8 +10,6 @@ on:
     - cron: "0 8 * * 1-5"
     - cron: "45 9 * * 1-5"
     - cron: "0 10 * * 1-5"
-  workflow_dispatch:
-
 jobs:
   snapshot:
     runs-on: ubuntu-latest
