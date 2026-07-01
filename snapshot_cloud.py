@@ -161,8 +161,9 @@ def fetch_nifty50(obj, nifty_ltp, token_map):
         if not info:
             print(f"  ⚠️  {sym}: not found in instrument master — skipping")
             not_found.append(sym)
+            wpts = round(nifty_ltp * (wt/100), 2) if nifty_ltp else None
             stocks.append({"symbol": sym, "ltp": None, "chng": None, "pChng": None,
-                           "weight": wt, "contrib": None})
+                           "weight": wt, "weight_pts": wpts, "contrib": None})
             continue
 
         for attempt in range(3):
@@ -174,9 +175,10 @@ def fetch_nifty50(obj, nifty_ltp, token_map):
                     chng  = round(ltp - close, 2)
                     pct   = round((chng / close) * 100, 2) if close else 0.0
                     contrib = round(nifty_ltp * (pct/100) * (wt/100), 2) if nifty_ltp else None
+                    weight_pts = round(nifty_ltp * (wt/100), 2) if nifty_ltp else None
                     stocks.append({
                         "symbol": sym, "ltp": ltp, "chng": chng, "pChng": pct,
-                        "weight": wt, "contrib": contrib
+                        "weight": wt, "weight_pts": weight_pts, "contrib": contrib
                     })
                     print(f"  ✅ {sym}: {ltp}  {pct:+.2f}%" +
                           (f"  contrib={contrib:+.2f}pts" if contrib is not None else ""))
@@ -184,15 +186,17 @@ def fetch_nifty50(obj, nifty_ltp, token_map):
                     msg = r.get("message","")
                     if "rate" in msg.lower() and attempt < 2:
                         time.sleep(3); continue
+                    wpts = round(nifty_ltp * (wt/100), 2) if nifty_ltp else None
                     stocks.append({"symbol": sym, "ltp": None, "chng": None, "pChng": None,
-                                   "weight": wt, "contrib": None})
+                                   "weight": wt, "weight_pts": wpts, "contrib": None})
                     print(f"  ⚠️  {sym}: {msg}")
                 break
             except Exception as e:
                 if "rate" in str(e).lower() and attempt < 2:
                     time.sleep(5); continue
+                wpts = round(nifty_ltp * (wt/100), 2) if nifty_ltp else None
                 stocks.append({"symbol": sym, "ltp": None, "chng": None, "pChng": None,
-                               "weight": wt, "contrib": None})
+                               "weight": wt, "weight_pts": wpts, "contrib": None})
                 print(f"  ❌ {sym}: {e}")
                 break
         time.sleep(0.8)
@@ -251,7 +255,7 @@ def build_excel(label, ist_dt, indices, stocks):
     sc(ws.cell(sr,1,f"📋  ALL NIFTY 50 STOCKS  [{len(stocks)} stocks]"),
        bg=C["hdr_dark"], fg=C["white"], bold=True, size=11, ha="center")
     sr += 1
-    headers = ["#","SYMBOL","LTP (₹)","CHANGE (₹)","% CHANGE","WEIGHT %","CONTRIB (pts)"]
+    headers = ["#","SYMBOL","LTP (₹)","CHANGE (₹)","% CHANGE","WEIGHT (pts)","CONTRIB (pts)"]
     for h, col in zip(headers, range(1,8)):
         sc(ws.cell(sr,col,h), bg="3949AB", fg=C["white"], bold=True, ha="center")
 
@@ -269,7 +273,7 @@ def build_excel(label, ist_dt, indices, stocks):
             (3, s["ltp"],                      "#,##0.00"),
             (4, s["chng"],                     "+#,##0.00;-#,##0.00"),
             (5, s["pChng"] and s["pChng"]/100, "+0.00%;-0.00%"),
-            (6, s.get("weight") and s["weight"]/100, "0.00%"),
+            (6, s.get("weight_pts"),           "#,##0.00"),
             (7, s.get("contrib"),              "+0.00;-0.00"),
         ]:
             cell=ws.cell(sr,col); cell.value=val
@@ -378,7 +382,7 @@ def send_email(creds, xlsx_path, label, ist_dt, indices, stocks):
   </tr></table>
   {note}
   <div style="margin-top:16px;padding:12px 14px;background:#f5f5f5;border-radius:8px;font-size:13px">
-    📎 Full Excel with all 50 stocks — includes weight% and Nifty point contribution<br>
+    📎 Full Excel with all 50 stocks — includes weight (in Nifty pts) and contribution<br>
     ☁️ Also saved to Google Drive → NSE Snapshots folder
   </div>
 </div></body></html>"""
@@ -403,25 +407,30 @@ def send_email(creds, xlsx_path, label, ist_dt, indices, stocks):
 def upload_drive(creds, xlsx_path):
     folder_id = creds["drive_folder"]
     if not folder_id or len(folder_id) < 10:
-        print("❌ GOOGLE_DRIVE_FOLDER_ID looks wrong — skipping Drive upload")
+        print("❌ GOOGLE_DRIVE_FOLDER_ID looks wrong — skipping")
         return
-    svc = build("drive","v3", credentials=get_sa_creds(
-        creds["sa_json"], ["https://www.googleapis.com/auth/drive"]))
     try:
-        svc.files().get(fileId=folder_id, fields="id,name").execute()
+        svc = build("drive", "v3", credentials=get_sa_creds(
+            creds["sa_json"], ["https://www.googleapis.com/auth/drive"]))
+        name = os.path.basename(xlsx_path)
+        # Delete existing file with same name
+        q = f"name='{name}' and '{folder_id}' in parents and trashed=false"
+        for f in svc.files().list(q=q, fields="files(id)",
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True).execute().get("files",[]):
+            svc.files().delete(fileId=f["id"], supportsAllDrives=True).execute()
+        # Upload — supportsAllDrives=True uses folder owner quota not service account quota
+        meta  = {"name": name, "parents": [folder_id]}
+        media = MediaFileUpload(xlsx_path,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            resumable=False)
+        res = svc.files().create(body=meta, media_body=media,
+            fields="id,webViewLink", supportsAllDrives=True).execute()
+        print(f"✅ Drive upload: {name}")
+        print(f"   Link: {res.get('webViewLink','N/A')}")
     except Exception as e:
-        print(f"❌ Folder not found: {e}")
-        return
-    name = os.path.basename(xlsx_path)
-    q    = f"name='{name}' and '{folder_id}' in parents and trashed=false"
-    for f in svc.files().list(q=q, fields="files(id)").execute().get("files",[]):
-        svc.files().delete(fileId=f["id"]).execute()
-    meta  = {"name": name, "parents": [folder_id]}
-    media = MediaFileUpload(xlsx_path,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    res = svc.files().create(body=meta, media_body=media, fields="id,webViewLink").execute()
-    print(f"✅ Drive upload: {name}")
-    print(f"   {res.get('webViewLink','')}")
+        print(f"❌ Drive upload failed: {e}")
+        print("   Fix: share NSE Snapshots folder with service account as Editor")
 
 # ── Google Sheets ─────────────────────────────────────────────
 def update_sheets(creds, label, ist_dt, indices, stocks):
@@ -445,7 +454,7 @@ def update_sheets(creds, label, ist_dt, indices, stocks):
             rows.append([name, d.get("ltp","N/A"), d.get("chng","N/A"),
                          f"{p:+.2f}%" if p is not None else "N/A",""]+[""]*15)
         rows.append([""]*20)
-        rows.append(["#","SYMBOL","LTP","CHG","% CHG","WT%","CONTRIB","",
+        rows.append(["#","SYMBOL","LTP","CHG","% CHG","WT(pts)","CONTRIB","",
                      "SYMBOL","LTP","CHG","% CHG","CONTRIB","",
                      "SYMBOL","LTP","CHG","% CHG","CONTRIB"])
 
@@ -458,7 +467,7 @@ def update_sheets(creds, label, ist_dt, indices, stocks):
             row = [i+1, s["symbol"], s.get("ltp",""),
                    f'{s["chng"]:+.2f}' if s["chng"] is not None else "",
                    f'{p:+.2f}%' if p is not None else "",
-                   f'{s["weight"]:.2f}%' if s.get("weight") else "",
+                   f'{s["weight_pts"]:.2f}' if s.get("weight_pts") is not None else "",
                    f'{s["contrib"]:+.2f}' if s.get("contrib") is not None else "", ""]
             row += ([top7p[i]["symbol"], top7p[i]["ltp"],
                      f'{top7p[i]["chng"]:+.2f}', f'{top7p[i]["pChng"]:+.2f}%',
