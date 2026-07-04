@@ -103,7 +103,7 @@ INDEX_TOKENS = {
     "SENSEX":            ("BSE", "SENSEX",             "99919000"),
     "BANK NIFTY":        ("NSE", "Nifty Bank",         "99926009"),
     "NIFTY IT":          ("NSE", "Nifty IT",           "99926011"),
-    "NIFTY SMALLCAP 50": ("NSE", "Nifty Smallcap 50", "99926074"),
+    "NIFTY SMALLCAP 50": ("NSE", "Nifty Smlcap 50", "99926072"),
 }
 
 def fetch_indices(obj):
