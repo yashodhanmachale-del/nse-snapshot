@@ -103,7 +103,7 @@ INDEX_TOKENS = {
     "SENSEX":            ("BSE", "SENSEX",             "99919000"),
     "BANK NIFTY":        ("NSE", "Nifty Bank",         "99926009"),
     "NIFTY IT":          ("NSE", "Nifty IT",           "99926011"),
-    "NIFTY SMALLCAP 50": ("NSE", "Nifty Smlcap 50", "99926072"),
+    "NIFTY SMALLCAP 50": ("NSE", "Nifty Smallcap 50", "99926061"),
 }
 
 def fetch_indices(obj):
@@ -520,102 +520,6 @@ def main():
     update_sheets(creds, label, ist_dt, indices, stocks)
 
     print(f"\n✅ ALL DONE — {disp} IST\n")
-
-if __name__ == "__main__":
-    main()
-
-"""
-find_smallcap_token.py
-Run this ONCE on GitHub Actions to find the correct Nifty Smallcap 50 token
-It will test multiple tokens and print which one returns valid data
-"""
-
-import os, json, pyotp, time
-from SmartApi import SmartConnect
-
-def env(key):
-    val = os.environ.get(key, "")
-    if not val:
-        raise ValueError(f"Missing secret: {key}")
-    return val.strip()
-
-def angel_login():
-    creds = {
-        "api_key":     env("ANGEL_API_KEY"),
-        "client_id":   env("ANGEL_CLIENT_ID"),
-        "password":    env("ANGEL_PASSWORD"),
-        "totp_secret": env("ANGEL_TOTP_SECRET"),
-    }
-    obj  = SmartConnect(api_key=creds["api_key"])
-    totp = pyotp.TOTP(creds["totp_secret"]).now()
-    data = obj.generateSession(creds["client_id"], creds["password"], totp)
-    if data["status"] is False:
-        raise Exception("Login failed: " + str(data.get("message","")))
-    print("✅ Login OK\n")
-    return obj
-
-# All possible Nifty Smallcap 50 tokens to test
-CANDIDATES = [
-    ("99926072", "Nifty Smlcap 50"),
-    ("99926073", "Nifty Smlcap 100"),
-    ("99926074", "Nifty Smlcap 250"),
-    ("99926050", "Nifty Midcap Select"),
-    ("99926051", "Nifty Midcap Select alt"),
-    ("99926052", "Nifty Midcap Select alt2"),
-    ("99926053", "Possible Smallcap 50"),
-    ("99926054", "Possible Smallcap 50"),
-    ("99926055", "Possible Smallcap 50"),
-    ("99926056", "Possible Smallcap 50"),
-    ("99926057", "Possible Smallcap 50"),
-    ("99926058", "Possible Smallcap 50"),
-    ("99926059", "Possible Smallcap 50"),
-    ("99926060", "Possible Smallcap 50"),
-    ("99926061", "Possible Smallcap 50"),
-    ("99926062", "Possible Smallcap 50"),
-    ("99926063", "Possible Smallcap 50"),
-    ("99926064", "Possible Smallcap 50"),
-    ("99926065", "Possible Smallcap 50"),
-    ("99926066", "Possible Smallcap 50"),
-    ("99926067", "Possible Smallcap 50"),
-    ("99926068", "Possible Smallcap 50"),
-    ("99926069", "Possible Smallcap 50"),
-    ("99926070", "Possible Smallcap 50"),
-    ("99926071", "Possible Smallcap 50"),
-]
-
-def main():
-    print("=" * 55)
-    print("  Nifty Smallcap 50 Token Finder")
-    print("=" * 55)
-    print("Testing all candidate tokens...\n")
-    print("Today's Nifty Smallcap 50 approximate range: 18000-20000")
-    print("Use that range to identify correct token below\n")
-    print("-" * 55)
-
-    obj = angel_login()
-
-    results = []
-    for token, label in CANDIDATES:
-        try:
-            r = obj.ltpData("NSE", label, token)
-            if r.get("status") and r.get("data"):
-                ltp   = r["data"].get("ltp", 0)
-                close = r["data"].get("close", 0)
-                print(f"Token {token} | LTP={ltp:>10} | Close={close:>10} | {label}")
-                results.append((token, label, ltp))
-            else:
-                print(f"Token {token} | NO DATA | {r.get('message','')} | {label}")
-        except Exception as e:
-            print(f"Token {token} | ERROR: {e} | {label}")
-        time.sleep(0.5)
-
-    print("\n" + "=" * 55)
-    print("TOKENS THAT RETURNED DATA:")
-    for token, label, ltp in results:
-        print(f"  Token {token} → LTP {ltp} ({label})")
-    print("\nCompare LTP values with actual Nifty Smallcap 50")
-    print("on nseindia.com to identify correct token")
-    print("=" * 55)
 
 if __name__ == "__main__":
     main()
