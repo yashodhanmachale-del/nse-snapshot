@@ -1,7 +1,6 @@
 """
-snapshot_cloud.py v9
-Angel One Smart API → Excel (Nifty 50 snapshot) + Levels Excel + Email + Drive + Sheets
-OB Signal read from GitHub Variable OB_SIGNAL (set BULLISH / BEARISH / NONE before run)
+snapshot_cloud.py v10
+Angel One Smart API → Excel (Nifty 50 snapshot) + Breadth Score + Email + Drive + Sheets
 """
 
 import os, json, pyotp, gspread, traceback, smtplib, time, requests
@@ -24,26 +23,35 @@ IST = ZoneInfo("Asia/Kolkata")
 INSTRUMENT_MASTER_URL = "https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMaster.json"
 
 # ════════════════════════════════════════════════════════════
-# LEVEL MULTIPLIERS (from your Excel — fixed % from prev close)
+# BREADTH SCORE FORMULA: count * 7 / 50  → round to int
+# Positive score + Negative score = 7 always
 # ════════════════════════════════════════════════════════════
-LEVEL_MULTIPLIERS = {
-    "RAR":   ( 0.50881481481481472, "UP",   "TOP Level (Primary Bullish Target)"),
-    "HS":    ( 0.32575444444444435, "UP",   "2nd Top (Secondary Bullish Target)"),
-    "CS":    ( 0.31405555555555557, "UP",   "Upside Level 3"),
-    "ALMSC": ( 0.25322222222222213, "UP",   "Upside Level 4"),
-    "IFNT":  ( 0.23495833333333329, "UP",   "Upside Level 5"),
-    "AL2n1": ( 0.21695611111111102, "UP",   "Upside Level 6"),
-    "2n1":   ( 0.18991666666666659, "UP",   "Upside Level 7"),
-    "MPLR":  ( 0.12661111111111106, "UP",   "Upside Level 8"),
-    "TDAY":  (-0.11987271111111109, "DOWN", "2nd Bottom (Secondary Bearish Target)"),
-    "NnN":   (-0.14973456790123463, "DOWN", "BOTTOM Level (Primary Bearish Target)"),
-}
+def breadth_score(count):
+    return round(count * 7 / 50)
 
-OB_TARGETS = {
-    "BULLISH": {"primary": "RAR",  "secondary": "HS",   "label": "🟢 BULLISH OB", "color": "1B5E20", "bg": "E8F5E9"},
-    "BEARISH": {"primary": "NnN",  "secondary": "TDAY", "label": "🔴 BEARISH OB", "color": "B71C1C", "bg": "FFEBEE"},
-    "NONE":    {"primary": None,   "secondary": None,   "label": "⚪ No OB Signal","color": "757575", "bg": "F5F5F5"},
-}
+def calc_breadth(stocks):
+    """Calculate breadth score from stock contribution data."""
+    valid   = [s for s in stocks if s.get("contrib") is not None]
+    pos     = [s for s in valid if s["contrib"] >= 0]
+    neg     = [s for s in valid if s["contrib"] <  0]
+    pos_cnt = len(pos)
+    neg_cnt = len(neg)
+    pos_pts = round(sum(s["contrib"] for s in pos), 2)
+    neg_pts = round(sum(s["contrib"] for s in neg), 2)
+    pos_sc  = breadth_score(pos_cnt)
+    neg_sc  = breadth_score(neg_cnt)
+    total   = pos_sc + neg_sc
+    return {
+        "pos_count": pos_cnt,
+        "neg_count": neg_cnt,
+        "pos_contrib_sum": pos_pts,
+        "neg_contrib_sum": neg_pts,
+        "pos_score":  pos_sc,
+        "neg_score":  neg_sc,
+        "total_score": total,
+        "pos_stocks": sorted(pos, key=lambda x: x["contrib"], reverse=True),
+        "neg_stocks": sorted(neg, key=lambda x: x["contrib"]),
+    }
 
 # ════════════════════════════════════════════════════════════
 # CREDENTIALS
@@ -63,7 +71,7 @@ def get_creds():
         "drive_folder": env("GOOGLE_DRIVE_FOLDER_ID"),
         "sheet_id":     env("GOOGLE_SHEET_ID"),
         "sa_json":      env("SERVICE_ACCOUNT_JSON"),
-        "ob_signal":    env("OB_SIGNAL", "NONE").upper(),
+
     }
 
 def get_sa_creds(sa_json_str, scopes):
@@ -239,21 +247,43 @@ def fetch_nifty50(obj, nifty_ltp, token_map):
 # ════════════════════════════════════════════════════════════
 # LEVEL CALCULATOR
 # ════════════════════════════════════════════════════════════
-def calculate_levels(prev_close, nifty_ltp):
-    levels = {}
-    for name, (mult_pct, direction, desc) in LEVEL_MULTIPLIERS.items():
-        level_val  = prev_close * (1 + mult_pct / 100)
-        pts_change = round(level_val - prev_close, 2)
-        dist_ltp   = round(level_val - nifty_ltp, 2)
-        levels[name] = {
-            "value":     round(level_val, 2),
-            "pts":       pts_change,
-            "pct":       round(mult_pct, 6),
-            "direction": direction,
-            "desc":      desc,
-            "dist_ltp":  dist_ltp,
-        }
-    return levels
+
+# ════════════════════════════════════════════════════════════
+# BREADTH SCORE
+# Formula: count * 7 / 50 → round to integer
+# Positive score + Negative score always = 7
+# ════════════════════════════════════════════════════════════
+def breadth_score(count):
+    return round(count * 7 / 50)
+
+def calc_breadth(stocks):
+    """
+    Separates stocks into positive and negative by contribution pts.
+    Calculates sum of contribution pts for each side.
+    Applies breadth score formula: count * 7 / 50 → rounded integer.
+    Example: 36 pos → 36*7/50=5.04 → 5,  14 neg → 14*7/50=1.96 → 2,  total=7
+    """
+    valid   = [s for s in stocks if s.get("contrib") is not None]
+    pos     = [s for s in valid if s["contrib"] >= 0]
+    neg     = [s for s in valid if s["contrib"] <  0]
+    pos_cnt = len(pos)
+    neg_cnt = len(neg)
+    pos_pts = round(sum(s["contrib"] for s in pos), 2)
+    neg_pts = round(sum(s["contrib"] for s in neg), 2)
+    pos_sc  = breadth_score(pos_cnt)
+    neg_sc  = breadth_score(neg_cnt)
+    return {
+        "pos_count":       pos_cnt,
+        "neg_count":       neg_cnt,
+        "pos_contrib_sum": pos_pts,
+        "neg_contrib_sum": neg_pts,
+        "pos_score":       pos_sc,
+        "neg_score":       neg_sc,
+        "total_score":     pos_sc + neg_sc,
+        "display":         f"{pos_sc} | {neg_sc}",
+        "pos_stocks":      sorted(pos, key=lambda x: x["contrib"], reverse=True),
+        "neg_stocks":      sorted(neg, key=lambda x: x["contrib"]),
+    }
 
 # ════════════════════════════════════════════════════════════
 # BUILD SNAPSHOT EXCEL (File 1)
@@ -355,188 +385,16 @@ def build_snapshot_excel(label, ist_dt, indices, stocks):
 # ════════════════════════════════════════════════════════════
 # BUILD LEVELS EXCEL (File 2)
 # ════════════════════════════════════════════════════════════
-def build_levels_excel(label, ist_dt, nifty_ltp, prev_close, ob_signal, indices, levels):
-    wb = Workbook(); ws = wb.active
-    ws.title = "Nifty Levels"
-    disp = label[:2]+":"+label[2:] if len(label)==4 else label
-    time_str = ist_dt.strftime("%d-%b-%Y %H:%M:%S")
-    ob = OB_TARGETS.get(ob_signal, OB_TARGETS["NONE"])
-    primary_name   = ob["primary"]
-    secondary_name = ob["secondary"]
-
-    # Title
-    ws.merge_cells("A1:J1")
-    c = ws["A1"]; c.value = f"NIFTY 50 LEVELS  —  {disp} IST"
-    sc(c, bg="0D47A1", fg="FFFFFF", bold=True, size=14, ha="center")
-    ws.row_dimensions[1].height = 28
-
-    ws.merge_cells("A2:J2")
-    ws["A2"].value = (f"Captured: {time_str}  |  "
-                      f"Prev Close (Base): {prev_close:,.2f}  |  "
-                      f"Current LTP: {nifty_ltp:,.2f}  |  "
-                      f"OB Signal: {ob['label']}")
-    ws["A2"].fill=fill("E3F2FD"); ws["A2"].font=font(size=10,color="333333")
-    ws["A2"].alignment=aln("center")
-
-    # OB Signal Box
-    ws.merge_cells("A4:J4")
-    c = ws["A4"]
-    if primary_name:
-        pv = levels[primary_name]["value"]
-        sv = levels[secondary_name]["value"]
-        c.value = (f"{ob['label']}  →  "
-                   f"⭐ PRIMARY TARGET: {primary_name} = {pv:,.2f}  "
-                   f"({levels[primary_name]['pts']:+.2f} pts from prev close)     "
-                   f"✅ SECONDARY TARGET: {secondary_name} = {sv:,.2f}  "
-                   f"({levels[secondary_name]['pts']:+.2f} pts from prev close)")
-    else:
-        c.value = f"{ob['label']}  →  No OB signal. Showing all levels for reference."
-    c.fill=fill(ob["bg"]); c.font=font(bold=True,color=ob["color"],size=12)
-    c.alignment=aln("center"); c.border=brd()
-    ws.row_dimensions[4].height = 30
-
-    # Index summary
-    r = 6
-    ws.merge_cells(f"A{r}:J{r}")
-    sc(ws.cell(r,1,"📊  INDEX SNAPSHOT"), bg="283593", fg="FFFFFF", bold=True, size=11, ha="center")
-    r += 1
-    for h, col in zip(["INDEX","LTP","CHANGE","% CHANGE"], range(1,5)):
-        sc(ws.cell(r,col,h), bg="1976D2", fg="FFFFFF", bold=True, ha="center")
-    for i, name in enumerate(["NIFTY 50","BANK NIFTY","NIFTY IT","NIFTY SMALLCAP 50","SENSEX"]):
-        r += 1; d=indices.get(name,{}); pct=d.get("pct")
-        bg="E8EAF6" if i%2==0 else "FFFFFF"; pos=pct is not None and pct>=0
-        ws.cell(r,1,name).font=font(bold=True)
-        ws.cell(r,1).fill=fill(bg);ws.cell(r,1).border=brd();ws.cell(r,1).alignment=aln()
-        for col,val,fmt in [(2,d.get("ltp"),"#,##0.00"),(3,d.get("chng"),"+#,##0.00;-#,##0.00"),
-                             (4,pct and pct/100,"+0.00%;-0.00%")]:
-            cell=ws.cell(r,col)
-            if pct is not None:
-                cell.value=val;cell.number_format=fmt
-                cell.font=font(bold=True,color="1B5E20" if pos else "B71C1C")
-                cell.fill=fill("E8F5E9" if pos else "FFEBEE")
-            else:
-                cell.value="N/A";cell.font=font(color="9E9E9E");cell.fill=fill(bg)
-            cell.border=brd();cell.alignment=aln("center")
-
-    # Levels table
-    r += 2
-    ws.merge_cells(f"A{r}:J{r}")
-    sc(ws.cell(r,1,f"📐  NIFTY LEVELS  (All calculated from Prev Close: {prev_close:,.2f})"),
-       bg="283593", fg="FFFFFF", bold=True, size=11, ha="center")
-    r += 1
-    hdrs = ["LEVEL","DESCRIPTION","DIRECTION","LEVEL VALUE","FROM PREV CLOSE (pts)",
-            "FROM PREV CLOSE (%)","FROM CURRENT LTP (pts)","OB TARGET","SIGNAL"]
-    for col,h in enumerate(hdrs,1):
-        sc(ws.cell(r,col,h), bg="3949AB", fg="FFFFFF", bold=True, ha="center")
-
-    # Upside levels (descending) then downside
-    up = sorted([(n,v) for n,v in levels.items() if v["direction"]=="UP"],
-                key=lambda x:x[1]["value"], reverse=True)
-    dn = sorted([(n,v) for n,v in levels.items() if v["direction"]=="DOWN"],
-                key=lambda x:x[1]["value"], reverse=True)
-
-    for i, (name, lv) in enumerate(up + dn):
-        r += 1
-        is_primary   = (name == primary_name)
-        is_secondary = (name == secondary_name)
-        is_up = lv["direction"] == "UP"
-
-        if is_primary:   bg = "FFF176"
-        elif is_secondary: bg = "FFF9C4"
-        elif is_up:      bg = "E8F5E9" if i%2==0 else "F1F8E9"
-        else:            bg = "FFEBEE" if i%2==0 else "FCE4EC"
-
-        tc = "1B5E20" if is_up else "B71C1C"
-        ob_lbl = "⭐ PRIMARY TARGET" if is_primary else ("✅ SECONDARY TARGET" if is_secondary else "")
-        sig_lbl = ob["label"] if (is_primary or is_secondary) else ""
-
-        row_vals = [
-            (name,                  True),
-            (lv["desc"],            False),
-            ("▲ UPSIDE" if is_up else "▼ DOWNSIDE", True),
-            (lv["value"],           True),
-            (lv["pts"],             True),
-            (lv["pct"]/100,         True),
-            (lv["dist_ltp"],        True),
-            (ob_lbl,                True),
-            (sig_lbl,               False),
-        ]
-        fmts = [None,None,None,"#,##0.00","+#,##0.00;-#,##0.00",
-                "+0.0000%;-0.0000%","+#,##0.00;-#,##0.00",None,None]
-
-        for col,(val,bold) in enumerate(row_vals,1):
-            cell=ws.cell(r,col,val)
-            cell_bg = "FF6F00" if (is_primary and col==1) else bg
-            cell.fill=fill(cell_bg)
-            cell.font=font(bold=bold or is_primary,
-                           color=("FFFFFF" if (is_primary and col==1) else
-                                  ("FF6F00" if is_primary else
-                                   ("E65100" if is_secondary else tc))))
-            cell.border=brd()
-            cell.alignment=aln("left" if col in(2,8,9) else "center")
-            if fmts[col-1] and val is not None:
-                cell.number_format=fmts[col-1]
-        ws.row_dimensions[r].height=18
-
-    # Visual level guide
-    r += 2
-    ws.merge_cells(f"A{r}:J{r}")
-    sc(ws.cell(r,1,"📈  VISUAL LEVEL GUIDE  (⭐ = Primary Target  ✅ = Secondary Target  🔵 = Current LTP)"),
-       bg="283593", fg="FFFFFF", bold=True, size=11, ha="center")
-    r += 1
-
-    all_sorted = sorted([(n,v) for n,v in levels.items()],
-                        key=lambda x:x[1]["value"], reverse=True)
-    for name, lv in all_sorted:
-        is_primary   = (name == primary_name)
-        is_secondary = (name == secondary_name)
-        is_up = lv["direction"] == "UP"
-
-        # Insert current LTP marker between levels
-        if lv["value"] <= nifty_ltp and (all_sorted.index((name,lv))==0 or
-           all_sorted[all_sorted.index((name,lv))-1][1]["value"] > nifty_ltp):
-            ws.merge_cells(f"A{r}:J{r}")
-            c=ws.cell(r,1,f"  🔵  CURRENT LTP: {nifty_ltp:,.2f}")
-            c.fill=fill("E3F2FD");c.font=font(bold=True,color="0D47A1",size=11)
-            c.alignment=aln("left");c.border=brd()
-            ws.row_dimensions[r].height=22
-            r += 1
-
-        ws.merge_cells(f"A{r}:J{r}")
-        star = "⭐  " if is_primary else ("✅  " if is_secondary else "      ")
-        arr  = "▲" if is_up else "▼"
-        dist = abs(lv["dist_ltp"])
-        c=ws.cell(r,1,
-            f"  {star}{arr}  {name:<7}  {lv['value']:>10,.2f}  "
-            f"({lv['pts']:>+7.2f} pts from prev close)    "
-            f"[{dist:>7.2f} pts from LTP]    {lv['desc']}")
-        bg = "FFF176" if is_primary else ("FFF9C4" if is_secondary else
-             ("E8F5E9" if is_up else "FFEBEE"))
-        tc = "1B5E20" if is_up else "B71C1C"
-        c.fill=fill(bg)
-        c.font=font(bold=is_primary or is_secondary,
-                    color="FF6F00" if is_primary else ("E65100" if is_secondary else tc),
-                    size=10)
-        c.alignment=aln("left");c.border=brd()
-        ws.row_dimensions[r].height=18
-        r += 1
-
-    # Column widths
-    for col,w in {1:9,2:30,3:14,4:14,5:18,6:18,7:20,8:22,9:20}.items():
-        ws.column_dimensions[get_column_letter(col)].width=w
-    ws.freeze_panes="A5"
-    return wb
-
 # ════════════════════════════════════════════════════════════
 # EMAIL
 # ════════════════════════════════════════════════════════════
-def send_email(creds, snapshot_path, levels_path, label, ist_dt,
-               indices, stocks, levels, ob_signal, nifty_ltp, prev_close):
+def send_email(creds, snapshot_path, label, ist_dt, indices, stocks, breadth):
     disp    = label[:2]+":"+label[2:] if len(label)==4 else label
-    subject = f"📊 NSE Snapshot + Levels {disp} IST — {ist_dt.strftime('%d %b %Y')}"
-    ob      = OB_TARGETS.get(ob_signal, OB_TARGETS["NONE"])
-    primary_name   = ob["primary"]
-    secondary_name = ob["secondary"]
+    subject = f"📊 NSE Snapshot {disp} IST — {ist_dt.strftime('%d %b %Y')}"
+
+    valid   = [s for s in stocks if s.get("contrib") is not None]
+    top3p   = breadth["pos_stocks"][:3]
+    top3n   = breadth["neg_stocks"][:3]
 
     # Index HTML
     idx_html = ""
@@ -552,97 +410,58 @@ def send_email(creds, snapshot_path, levels_path, label, ist_dt,
         else:
             idx_html += f'<tr><td style="padding:7px 14px;font-weight:bold">{name}</td><td style="padding:7px;color:#9e9e9e;text-align:center">N/A</td><td>—</td></tr>'
 
-    # OB signal box
-    if primary_name:
-        pv = levels[primary_name]["value"]
-        sv = levels[secondary_name]["value"]
-        ob_html = f"""
-        <div style="background:{ob['bg']};border:2px solid #{ob['color']};border-radius:10px;
-                    padding:16px;margin:16px 0;text-align:center">
-          <div style="font-size:20px;font-weight:bold;color:#{ob['color']};margin-bottom:10px">
-            {ob['label']}
-          </div>
-          <table width="100%" style="border-collapse:collapse">
-            <tr>
-              <td width="50%" style="text-align:center;padding:8px;
-                  background:white;border-radius:8px;border:1px solid #{ob['color']}">
-                <div style="font-size:11px;color:#666;margin-bottom:4px">⭐ PRIMARY TARGET</div>
-                <div style="font-size:22px;font-weight:bold;color:#{ob['color']}">{primary_name}</div>
-                <div style="font-size:18px;font-weight:bold">{pv:,.2f}</div>
-                <div style="font-size:12px;color:#666">{levels[primary_name]['pts']:+.2f} pts from prev close</div>
-              </td>
-              <td width="4%"></td>
-              <td width="46%" style="text-align:center;padding:8px;
-                  background:white;border-radius:8px;border:1px solid #{ob['color']}">
-                <div style="font-size:11px;color:#666;margin-bottom:4px">✅ SECONDARY TARGET</div>
-                <div style="font-size:22px;font-weight:bold;color:#{ob['color']}">{secondary_name}</div>
-                <div style="font-size:18px;font-weight:bold">{sv:,.2f}</div>
-                <div style="font-size:12px;color:#666">{levels[secondary_name]['pts']:+.2f} pts from prev close</div>
-              </td>
-            </tr>
-          </table>
-          <div style="margin-top:10px;font-size:12px;color:#666">
-            Prev Close: {prev_close:,.2f}  |  Current LTP: {nifty_ltp:,.2f}
-          </div>
-        </div>"""
-    else:
-        ob_html = '<div style="background:#f5f5f5;border-radius:8px;padding:12px;text-align:center;color:#757575;margin:16px 0">⚪ No OB Signal set — Set OB_SIGNAL variable in GitHub before next run</div>'
+    def srows(lst, color, bg):
+        return "".join(
+            f'<tr style="background:{bg}"><td style="padding:6px 12px;font-weight:bold">{s["symbol"]}</td>'
+            f'<td style="padding:6px;color:{color};font-weight:bold;text-align:center">{s["pChng"]:+.2f}%</td>'
+            f'<td style="padding:6px;color:{color};text-align:center">{s["contrib"]:+.2f} pts</td></tr>'
+            for s in lst)
 
-    # All levels table
-    up_rows=""; dn_rows=""
-    for name, lv in sorted(levels.items(), key=lambda x: x[1]["value"], reverse=True):
-        is_p = (name==primary_name); is_s = (name==secondary_name)
-        is_up = lv["direction"]=="UP"
-        star = "⭐ " if is_p else ("✅ " if is_s else "")
-        rbg = "#FFF176" if is_p else ("#FFF9C4" if is_s else ("#e8f5e9" if is_up else "#ffebee"))
-        fw  = "bold" if (is_p or is_s) else "normal"
-        tc  = "#1b5e20" if is_up else "#b71c1c"
-        row = (f'<tr style="background:{rbg}">'
-               f'<td style="padding:6px 10px;font-weight:{fw};color:{tc}">{star}{name}</td>'
-               f'<td style="padding:6px 10px;font-weight:bold;text-align:right">{lv["value"]:,.2f}</td>'
-               f'<td style="padding:6px 10px;color:{tc};text-align:right">{lv["pts"]:+.2f} pts</td>'
-               f'<td style="padding:6px 10px;color:#666;text-align:right">{lv["dist_ltp"]:+.2f} from LTP</td></tr>')
-        if is_up: up_rows += row
-        else:     dn_rows += row
-
-    levels_html = f"""
-    <h3 style="color:#0d47a1;margin:16px 0 8px">📐 Nifty Levels (Base: Prev Close {prev_close:,.2f})</h3>
-    <table width="100%" cellspacing="0" style="border-collapse:collapse;border:1px solid #e0e0e0;margin-bottom:8px">
-      <tr style="background:#1b5e20;color:white"><th style="padding:8px;text-align:left">▲ UPSIDE</th>
-      <th style="padding:8px;text-align:right">Level</th><th style="padding:8px;text-align:right">From Close</th>
-      <th style="padding:8px;text-align:right">From LTP</th></tr>{up_rows}
-    </table>
-    <table width="100%" cellspacing="0" style="border-collapse:collapse;border:1px solid #e0e0e0">
-      <tr style="background:#b71c1c;color:white"><th style="padding:8px;text-align:left">▼ DOWNSIDE</th>
-      <th style="padding:8px;text-align:right">Level</th><th style="padding:8px;text-align:right">From Close</th>
-      <th style="padding:8px;text-align:right">From LTP</th></tr>{dn_rows}
-    </table>"""
-
-    # Top 3 movers
-    valid=[s for s in stocks if s.get("contrib") is not None]
-    top3p=sorted(valid,key=lambda x:x["contrib"],reverse=True)[:3]
-    top3n=sorted(valid,key=lambda x:x["contrib"])[:3]
-    def srows(lst,color,bg):
-        return "".join(f'<tr style="background:{bg}"><td style="padding:6px 12px;font-weight:bold">{s["symbol"]}</td>'
-                       f'<td style="padding:6px;color:{color};font-weight:bold;text-align:center">{s["pChng"]:+.2f}%</td>'
-                       f'<td style="padding:6px;color:{color};text-align:center">{s["contrib"]:+.2f} pts</td></tr>'
-                       for s in lst)
+    note = ('<div style="background:#fff3e0;border-radius:6px;padding:10px 14px;margin-top:12px;'
+            'font-size:13px;color:#e65100">⚠️ Market closed or data unavailable.</div>'
+            if not valid else "")
 
     html = f"""<html><body style="font-family:Arial,sans-serif;max-width:640px;margin:auto">
 <div style="background:#0d47a1;color:white;padding:18px 22px;border-radius:10px 10px 0 0">
-  <h2 style="margin:0;font-size:20px">📊 NSE Snapshot + Levels — {disp} IST</h2>
+  <h2 style="margin:0;font-size:20px">📊 NSE Snapshot — {disp} IST</h2>
   <p style="margin:5px 0 0;opacity:.85;font-size:13px">{ist_dt.strftime('%d %b %Y  %H:%M:%S IST')}</p>
 </div>
 <div style="border:1px solid #ddd;border-top:none;padding:18px;border-radius:0 0 10px 10px">
-  {ob_html}
-  {levels_html}
-  <h3 style="color:#0d47a1;margin:16px 0 8px">Index Performance</h3>
+
+  <!-- BREADTH SCORE BOX -->
+  <div style="background:#e8eaf6;border:1px solid #3949ab;border-radius:10px;padding:16px;margin-bottom:16px;text-align:center">
+    <div style="font-size:13px;color:#3949ab;font-weight:500;margin-bottom:8px">📊 NIFTY 50 BREADTH SCORE</div>
+    <div style="display:flex;justify-content:center;align-items:center;gap:16px">
+      <div style="background:#e8f5e9;border:1px solid #2e7d32;border-radius:8px;padding:10px 20px">
+        <div style="font-size:11px;color:#2e7d32;font-weight:500">🟢 POSITIVE</div>
+        <div style="font-size:28px;font-weight:bold;color:#1b5e20">{breadth["pos_score"]}</div>
+        <div style="font-size:11px;color:#555">{breadth["pos_count"]} stocks</div>
+        <div style="font-size:12px;color:#1b5e20;font-weight:500">{breadth["pos_contrib_sum"]:+.2f} pts</div>
+      </div>
+      <div style="font-size:30px;color:#3949ab;font-weight:bold">|</div>
+      <div style="background:#ffebee;border:1px solid #c62828;border-radius:8px;padding:10px 20px">
+        <div style="font-size:11px;color:#c62828;font-weight:500">🔴 NEGATIVE</div>
+        <div style="font-size:28px;font-weight:bold;color:#b71c1c">{breadth["neg_score"]}</div>
+        <div style="font-size:11px;color:#555">{breadth["neg_count"]} stocks</div>
+        <div style="font-size:12px;color:#b71c1c;font-weight:500">{breadth["neg_contrib_sum"]:+.2f} pts</div>
+      </div>
+      <div style="font-size:30px;color:#3949ab;font-weight:bold">=</div>
+      <div style="background:#e8eaf6;border:1px solid #3949ab;border-radius:8px;padding:10px 20px">
+        <div style="font-size:11px;color:#3949ab;font-weight:500">TOTAL</div>
+        <div style="font-size:28px;font-weight:bold;color:#0d47a1">{breadth["total_score"]}</div>
+        <div style="font-size:11px;color:#555">always 7</div>
+      </div>
+    </div>
+  </div>
+
+  <h3 style="color:#0d47a1;margin:0 0 8px">Index Performance</h3>
   <table width="100%" cellspacing="0" style="border-collapse:collapse;border:1px solid #e0e0e0">
     <tr style="background:#1976d2;color:white">
       <th style="padding:8px 14px;text-align:left">Index</th>
       <th style="padding:8px">% Change</th><th style="padding:8px">LTP</th>
     </tr>{idx_html}
   </table>
+
   <table width="100%" style="margin-top:16px;border-collapse:collapse"><tr valign="top">
     <td width="50%" style="padding-right:8px">
       <h3 style="color:#2e7d32;margin:0 0 8px">🏆 Top 3 Boosters</h3>
@@ -657,31 +476,27 @@ def send_email(creds, snapshot_path, levels_path, label, ist_dt,
       </table>
     </td>
   </tr></table>
+  {note}
   <div style="margin-top:16px;padding:12px 14px;background:#f5f5f5;border-radius:8px;font-size:13px">
-    📎 2 Excel files attached: Snapshot (50 stocks) + Levels (OB targets)<br>
-    ☁️ Both saved to Google Drive → NSE Snapshots folder
+    📎 Excel with all 50 stocks attached<br>
+    ☁️ Saved to Google Drive → NSE Snapshots folder
   </div>
 </div></body></html>"""
 
     msg = MIMEMultipart("alternative")
     msg["From"]=creds["gmail_sender"]; msg["To"]=creds["recipient"]; msg["Subject"]=subject
     msg.attach(MIMEText(html,"html"))
-
-    for path in [snapshot_path, levels_path]:
-        with open(path,"rb") as f:
-            part=MIMEBase("application","vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            part.set_payload(f.read()); encoders.encode_base64(part)
-            part.add_header("Content-Disposition","attachment",filename=os.path.basename(path))
-            msg.attach(part)
-
+    with open(snapshot_path,"rb") as f:
+        part=MIMEBase("application","vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        part.set_payload(f.read()); encoders.encode_base64(part)
+        part.add_header("Content-Disposition","attachment",filename=os.path.basename(snapshot_path))
+        msg.attach(part)
     with smtplib.SMTP_SSL("smtp.gmail.com",465) as s:
         s.login(creds["gmail_sender"],creds["gmail_pass"])
         s.sendmail(creds["gmail_sender"],creds["recipient"],msg.as_string())
-    print(f"✅ Email sent with 2 attachments")
+    print(f"✅ Email sent to {creds['recipient']}")
 
-# ════════════════════════════════════════════════════════════
-# GOOGLE DRIVE
-# ════════════════════════════════════════════════════════════
+
 def upload_drive(creds, xlsx_path):
     folder_id = creds["drive_folder"]
     if not folder_id or len(folder_id) < 10:
@@ -707,24 +522,29 @@ def upload_drive(creds, xlsx_path):
 # ════════════════════════════════════════════════════════════
 # GOOGLE SHEETS
 # ════════════════════════════════════════════════════════════
-def update_sheets(creds, label, ist_dt, indices, stocks, levels, ob_signal, prev_close):
+def update_sheets(creds, label, ist_dt, indices, stocks, breadth):
     try:
         gc  = gspread.authorize(get_sa_creds(
             creds["sa_json"],["https://www.googleapis.com/auth/spreadsheets"]))
         sh  = gc.open_by_key(creds["sheet_id"])
         disp = label[:2]+":"+label[2:] if len(label)==4 else label
-        ob   = OB_TARGETS.get(ob_signal, OB_TARGETS["NONE"])
 
-        # Tab 1: Snapshot
         tab1 = "Snapshot_" + label
         try: sh.del_worksheet(sh.worksheet(tab1))
         except: pass
         ws1 = sh.add_worksheet(title=tab1, rows=120, cols=20)
+
         rows1 = [
             [f"NSE Snapshot — {disp} IST"]+[""]*19,
             [f"Captured: {ist_dt.strftime('%d-%b-%Y %H:%M:%S IST')}"]+[""]*19,
             [""]*20,
-            ["INDEX","LTP","CHG","% CHG",""]+["TOP 7 +ve","","","","",""]+["TOP 7 -ve","","","",""]
+            ["BREADTH SCORE","POSITIVE","NEGATIVE","TOTAL",""]+[""]*15,
+            [f"Score",breadth["pos_score"],breadth["neg_score"],breadth["total_score"],"",
+             f"Stocks",breadth["pos_count"],breadth["neg_count"],breadth["pos_count"]+breadth["neg_count"],"",
+             f"Contrib pts",breadth["pos_contrib_sum"],breadth["neg_contrib_sum"],
+             round(breadth["pos_contrib_sum"]+breadth["neg_contrib_sum"],2)]+[""]*5,
+            [""]*20,
+            ["INDEX","LTP","CHG","% CHG",""]+[""]*15,
         ]
         for name in ["NIFTY 50","SENSEX","BANK NIFTY","NIFTY IT","NIFTY SMALLCAP 50"]:
             d=indices.get(name,{}); p=d.get("pct")
@@ -732,12 +552,13 @@ def update_sheets(creds, label, ist_dt, indices, stocks, levels, ob_signal, prev
                           f"{p:+.2f}%" if p is not None else "N/A",""]+[""]*15)
         rows1.append([""]*20)
         rows1.append(["#","SYMBOL","LTP","CHG","% CHG","WT(pts)","CONTRIB","",
-                      "SYMBOL","LTP","CHG","% CHG","CONTRIB","",
-                      "SYMBOL","LTP","CHG","% CHG","CONTRIB"])
-        valid=[s for s in stocks if s.get("contrib") is not None]
-        top7p=sorted(valid,key=lambda x:x["contrib"],reverse=True)[:7]
-        top7n=sorted(valid,key=lambda x:x["contrib"])[:7]
-        for i, s in enumerate(stocks):
+                      "TOP POSITIVE","LTP","CHG","% CHG","CONTRIB","",
+                      "TOP NEGATIVE","LTP","CHG","% CHG","CONTRIB"])
+
+        top7p = breadth["pos_stocks"][:7]
+        top7n = breadth["neg_stocks"][:7]
+        all_stocks = list(enumerate(stocks))
+        for i, s in all_stocks:
             p=s["pChng"]
             row=[i+1,s["symbol"],s.get("ltp",""),
                  f'{s["chng"]:+.2f}' if s["chng"] is not None else "",
@@ -751,37 +572,12 @@ def update_sheets(creds, label, ist_dt, indices, stocks, levels, ob_signal, prev
                    f'{top7n[i]["chng"]:+.2f}',f'{top7n[i]["pChng"]:+.2f}%',
                    f'{top7n[i]["contrib"]:+.2f}'] if i<len(top7n) else [""]*5)
             rows1.append(row)
-        ws1.update("A1",rows1)
-        print(f"✅ Sheets: {tab1}")
-
-        # Tab 2: Levels
-        tab2 = "Levels_" + label
-        try: sh.del_worksheet(sh.worksheet(tab2))
-        except: pass
-        ws2 = sh.add_worksheet(title=tab2, rows=30, cols=10)
-        rows2 = [
-            [f"NIFTY LEVELS — {disp} IST"]+[""]*9,
-            [f"Prev Close: {prev_close:,.2f}  |  OB Signal: {ob['label']}"]+[""]*9,
-            [""]*10,
-        ]
-        if ob["primary"]:
-            rows2.append([f"⭐ PRIMARY: {ob['primary']} = {levels[ob['primary']]['value']:,.2f}",
-                          f"✅ SECONDARY: {ob['secondary']} = {levels[ob['secondary']]['value']:,.2f}"]
-                         +[""]*8)
-        rows2.append([""]*10)
-        rows2.append(["LEVEL","DESCRIPTION","DIRECTION","VALUE","PTS FROM CLOSE",
-                      "% FROM CLOSE","PTS FROM LTP","OB TARGET","",""])
-        for name, lv in sorted(levels.items(), key=lambda x: x[1]["value"], reverse=True):
-            ob_lbl = "⭐ PRIMARY" if name==ob["primary"] else ("✅ SECONDARY" if name==ob["secondary"] else "")
-            rows2.append([name, lv["desc"], lv["direction"], lv["value"],
-                          f'{lv["pts"]:+.2f}', f'{lv["pct"]/100:+.4f}%',
-                          f'{lv["dist_ltp"]:+.2f}', ob_lbl, "", ""])
-        ws2.update("A1",rows2)
-        print(f"✅ Sheets: {tab2}")
-
+        ws1.update("A1", rows1)
+        print(f"✅ Sheets updated: {tab1}")
     except Exception as e:
-        print(f"⚠️  Sheets update failed: {e}")
+        print(f"⚠️  Sheets failed: {e}")
         traceback.print_exc()
+
 
 # ════════════════════════════════════════════════════════════
 # MAIN
@@ -790,11 +586,9 @@ def main():
     ist_dt    = datetime.now(IST)
     label     = env("MANUAL_LABEL") or ist_dt.strftime("%H%M")
     disp      = label[:2]+":"+label[2:] if len(label)==4 else label
-    ob_signal = env("OB_SIGNAL","NONE").upper()
 
     print(f"\n{'='*60}")
     print(f"  NSE Snapshot + Levels — {disp} IST | {ist_dt.strftime('%d-%b-%Y')}")
-    print(f"  OB Signal: {ob_signal}")
     print(f"{'='*60}")
 
     creds      = get_creds()
@@ -808,14 +602,14 @@ def main():
 
     stocks = fetch_nifty50(obj, nifty_ltp, token_map)
 
-    # Calculate levels
-    print("\n📐 Calculating levels...")
-    levels = calculate_levels(prev_close, nifty_ltp)
-    ob = OB_TARGETS.get(ob_signal, OB_TARGETS["NONE"])
-    print(f"  OB Signal: {ob['label']}")
-    if ob["primary"]:
-        print(f"  ⭐ Primary Target:   {ob['primary']} = {levels[ob['primary']]['value']:,.2f}")
-        print(f"  ✅ Secondary Target: {ob['secondary']} = {levels[ob['secondary']]['value']:,.2f}")
+    # Calculate breadth score
+    print("\n📊 Calculating breadth score...")
+    breadth = calc_breadth(stocks)
+    print(f"  Positive stocks : {breadth['pos_count']}  →  score {breadth['pos_score']}")
+    print(f"  Negative stocks : {breadth['neg_count']}  →  score {breadth['neg_score']}")
+    print(f"  Total score     : {breadth['total_score']} (always 7)")
+    print(f"  +ve contrib sum : {breadth['pos_contrib_sum']:+.2f} pts")
+    print(f"  -ve contrib sum : {breadth['neg_contrib_sum']:+.2f} pts")
 
     os.makedirs("output", exist_ok=True)
     date_str = ist_dt.strftime("%Y-%m-%d")
@@ -823,48 +617,20 @@ def main():
     # Build Excel 1 — Snapshot
     print("\n📁 Building Snapshot Excel...")
     wb1 = build_snapshot_excel(label, ist_dt, indices, stocks)
-    snap_path = f"output/NSE_Snapshot_{date_str}_{label}.xlsx"
+    snap_path = f"output/NSE_{date_str}_{label}.xlsx"
     wb1.save(snap_path)
     print(f"  ✅ {snap_path}")
 
-    # Build Excel 2 — Levels
-    print("\n📐 Building Levels Excel...")
-    wb2 = build_levels_excel(label, ist_dt, nifty_ltp, prev_close, ob_signal, indices, levels)
-    lvl_path = f"output/NSE_Levels_{date_str}_{label}.xlsx"
-    wb2.save(lvl_path)
-    print(f"  ✅ {lvl_path}")
-
-    # Send email with BOTH files attached
+    # Send email
     print("\n📧 Sending email...")
-    send_email(creds, snap_path, lvl_path, label, ist_dt,
-               indices, stocks, levels, ob_signal, nifty_ltp, prev_close)
+    send_email(creds, snap_path, label, ist_dt, indices, stocks, breadth)
 
-    # Upload BOTH to Drive
+    # Upload to Drive
     print("\n☁️  Uploading to Drive...")
     upload_drive(creds, snap_path)
-    upload_drive(creds, lvl_path)
 
     # Update Sheets
     print("\n📊 Updating Google Sheets...")
-    update_sheets(creds, label, ist_dt, indices, stocks, levels, ob_signal, prev_close)
+    update_sheets(creds, label, ist_dt, indices, stocks, breadth)
 
     print(f"\n✅ ALL DONE — {disp} IST\n")
-
-def calculate_levels(prev_close, nifty_ltp):
-    levels = {}
-    for name, (mult_pct, direction, desc) in LEVEL_MULTIPLIERS.items():
-        level_val  = prev_close * (1 + mult_pct / 100)
-        pts_change = round(level_val - prev_close, 2)
-        dist_ltp   = round(level_val - nifty_ltp, 2)
-        levels[name] = {
-            "value":     round(level_val, 2),
-            "pts":       pts_change,
-            "pct":       round(mult_pct, 6),
-            "direction": direction,
-            "desc":      desc,
-            "dist_ltp":  dist_ltp,
-        }
-    return levels
-
-if __name__ == "__main__":
-    main()
