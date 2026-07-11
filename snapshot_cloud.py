@@ -350,7 +350,7 @@ def calc_breadth(stocks):
 # ════════════════════════════════════════════════════════════
 # BUILD SNAPSHOT EXCEL (File 1)
 # ════════════════════════════════════════════════════════════
-def build_snapshot_excel(label, ist_dt, indices, stocks):
+def build_snapshot_excel(label, ist_dt, indices, stocks, breadth):
     wb = Workbook(); ws = wb.active
     ws.title = "Snapshot_" + label
     disp = label[:2]+":"+label[2:] if len(label)==4 else label
@@ -365,7 +365,61 @@ def build_snapshot_excel(label, ist_dt, indices, stocks):
     ws["A2"].fill = fill("E3F2FD"); ws["A2"].font = font(size=10, color="333333")
     ws["A2"].alignment = aln("center")
 
-    r = 4
+    # ── BREADTH SCORE SUMMARY TABLE ─────────────────────────
+    ws.merge_cells("A4:P4")
+    c = ws["A4"]
+    pos_s = breadth["pos_score"]; neg_s = breadth["neg_score"]
+    tot_s = breadth["total_score"]
+    pos_c = breadth["pos_count"]; neg_c = breadth["neg_count"]
+    pos_p = breadth["pos_contrib_sum"]; neg_p = breadth["neg_contrib_sum"]
+    c.value = (f"📊  BREADTH SCORE:   "
+               f"🟢 POSITIVE  {pos_s}  ({pos_c} stocks, {pos_p:+.2f} pts)   "
+               f"|   "
+               f"🔴 NEGATIVE  {neg_s}  ({neg_c} stocks, {neg_p:+.2f} pts)   "
+               f"=   TOTAL  {tot_s}  (always 7)   "
+               f"│  Formula: count × 7 ÷ 50")
+    c.fill = fill("0D47A1"); c.font = font(bold=True, color="FFFFFF", size=11)
+    c.alignment = aln("center"); c.border = brd()
+    ws.row_dimensions[4].height = 24
+
+    # Detailed breadth score boxes in row 5
+    # Box 1: Positive Score (large)
+    ws.merge_cells("A5:D6")
+    c = ws["A5"]
+    c.value = f"🟢  {pos_s}"
+    c.fill = fill("1B5E20"); c.font = font(bold=True, color="FFFFFF", size=28)
+    c.alignment = aln("center"); c.border = brd()
+    ws.row_dimensions[5].height = 30; ws.row_dimensions[6].height = 22
+
+    ws.merge_cells("E5:H6")
+    c = ws["E5"]
+    c.value = f"Positive: {pos_c} stocks  |  Contrib: {pos_p:+.2f} pts  |  Score={pos_c}x7/50={pos_s}"
+    c.fill = fill("E8F5E9"); c.font = font(bold=False, color="1B5E20", size=10)
+    c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    c.border = brd()
+
+    # Box 2: Separator |
+    ws.merge_cells("I5:I6")
+    c = ws["I5"]
+    c.value = "|"
+    c.fill = fill("E8EAF6"); c.font = font(bold=True, color="0D47A1", size=24)
+    c.alignment = aln("center"); c.border = brd()
+
+    # Box 3: Negative Score (large)
+    ws.merge_cells("J5:M6")
+    c = ws["J5"]
+    c.value = f"🔴  {neg_s}"
+    c.fill = fill("B71C1C"); c.font = font(bold=True, color="FFFFFF", size=28)
+    c.alignment = aln("center"); c.border = brd()
+
+    ws.merge_cells("N5:P6")
+    c = ws["N5"]
+    c.value = f"Negative: {neg_c} stocks  |  Contrib: {neg_p:+.2f} pts  |  Score={neg_c}x7/50={neg_s}"
+    c.fill = fill("FFEBEE"); c.font = font(bold=False, color="B71C1C", size=10)
+    c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    c.border = brd()
+
+    r = 8
     ws.merge_cells(f"A{r}:D{r}")
     sc(ws.cell(r,1,"📊  INDEX SUMMARY"), bg=C["hdr_dark"], fg=C["white"], bold=True, size=11, ha="center")
     r += 1
@@ -492,26 +546,32 @@ def send_email(creds, snapshot_path, label, ist_dt, indices, stocks, breadth):
 
   <!-- BREADTH SCORE BOX -->
   <div style="background:#e8eaf6;border:1px solid #3949ab;border-radius:10px;padding:16px;margin-bottom:16px;text-align:center">
-    <div style="font-size:13px;color:#3949ab;font-weight:500;margin-bottom:8px">📊 NIFTY 50 BREADTH SCORE</div>
-    <div style="display:flex;justify-content:center;align-items:center;gap:16px">
-      <div style="background:#e8f5e9;border:1px solid #2e7d32;border-radius:8px;padding:10px 20px">
-        <div style="font-size:11px;color:#2e7d32;font-weight:500">🟢 POSITIVE</div>
-        <div style="font-size:28px;font-weight:bold;color:#1b5e20">{breadth["pos_score"]}</div>
-        <div style="font-size:11px;color:#555">{breadth["pos_count"]} stocks</div>
-        <div style="font-size:12px;color:#1b5e20;font-weight:500">{breadth["pos_contrib_sum"]:+.2f} pts</div>
+    <div style="font-size:13px;color:#3949ab;font-weight:500;margin-bottom:12px">📊 NIFTY 50 BREADTH SCORE</div>
+
+    <!-- PRIMARY DISPLAY: Positive Score | Negative Score -->
+    <div style="background:#0d47a1;border-radius:10px;padding:16px;margin-bottom:14px;display:inline-block;min-width:280px">
+      <div style="font-size:13px;color:#90caf9;margin-bottom:6px">Highest Positive | Lowest Negative</div>
+      <div style="display:flex;justify-content:center;align-items:center;gap:8px">
+        <div style="font-size:52px;font-weight:900;color:#69f0ae;line-height:1">{breadth["pos_score"]}</div>
+        <div style="font-size:36px;font-weight:bold;color:white;margin:0 4px">|</div>
+        <div style="font-size:52px;font-weight:900;color:#ff5252;line-height:1">{breadth["neg_score"]}</div>
       </div>
-      <div style="font-size:30px;color:#3949ab;font-weight:bold">|</div>
-      <div style="background:#ffebee;border:1px solid #c62828;border-radius:8px;padding:10px 20px">
-        <div style="font-size:11px;color:#c62828;font-weight:500">🔴 NEGATIVE</div>
-        <div style="font-size:28px;font-weight:bold;color:#b71c1c">{breadth["neg_score"]}</div>
-        <div style="font-size:11px;color:#555">{breadth["neg_count"]} stocks</div>
-        <div style="font-size:12px;color:#b71c1c;font-weight:500">{breadth["neg_contrib_sum"]:+.2f} pts</div>
+      <div style="font-size:12px;color:#90caf9;margin-top:6px">Total = {breadth["total_score"]} (always 7)</div>
+    </div>
+
+    <!-- DETAIL ROW -->
+    <div style="display:flex;justify-content:center;align-items:stretch;gap:10px;margin-top:4px">
+      <div style="background:#e8f5e9;border:1px solid #2e7d32;border-radius:8px;padding:10px 18px;flex:1">
+        <div style="font-size:11px;color:#2e7d32;font-weight:500">🟢 POSITIVE STOCKS</div>
+        <div style="font-size:22px;font-weight:bold;color:#1b5e20">{breadth["pos_count"]} stocks</div>
+        <div style="font-size:12px;color:#1b5e20;font-weight:500">{breadth["pos_contrib_sum"]:+.2f} pts total</div>
+        <div style="font-size:11px;color:#555">Score = {breadth["pos_count"]} × 7 ÷ 50 = {breadth["pos_score"]}</div>
       </div>
-      <div style="font-size:30px;color:#3949ab;font-weight:bold">=</div>
-      <div style="background:#e8eaf6;border:1px solid #3949ab;border-radius:8px;padding:10px 20px">
-        <div style="font-size:11px;color:#3949ab;font-weight:500">TOTAL</div>
-        <div style="font-size:28px;font-weight:bold;color:#0d47a1">{breadth["total_score"]}</div>
-        <div style="font-size:11px;color:#555">always 7</div>
+      <div style="background:#ffebee;border:1px solid #c62828;border-radius:8px;padding:10px 18px;flex:1">
+        <div style="font-size:11px;color:#c62828;font-weight:500">🔴 NEGATIVE STOCKS</div>
+        <div style="font-size:22px;font-weight:bold;color:#b71c1c">{breadth["neg_count"]} stocks</div>
+        <div style="font-size:12px;color:#b71c1c;font-weight:500">{breadth["neg_contrib_sum"]:+.2f} pts total</div>
+        <div style="font-size:11px;color:#555">Score = {breadth["neg_count"]} × 7 ÷ 50 = {breadth["neg_score"]}</div>
       </div>
     </div>
   </div>
@@ -678,7 +738,7 @@ def main():
 
     # Build Excel 1 — Snapshot
     print("\n📁 Building Snapshot Excel...")
-    wb1 = build_snapshot_excel(label, ist_dt, indices, stocks)
+    wb1 = build_snapshot_excel(label, ist_dt, indices, stocks, breadth)
     snap_path = f"output/NSE_{date_str}_{label}.xlsx"
     wb1.save(snap_path)
     print(f"  ✅ {snap_path}")
