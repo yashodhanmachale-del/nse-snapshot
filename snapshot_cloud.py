@@ -321,9 +321,10 @@ def breadth_score(count):
 def calc_breadth(stocks):
     """
     Separates stocks into positive and negative by contribution pts.
-    Calculates sum of contribution pts for each side.
     Applies breadth score formula: count * 7 / 50 → rounded integer.
-    Example: 36 pos → 36*7/50=5.04 → 5,  14 neg → 14*7/50=1.96 → 2,  total=7
+    Ranked display: higher score always listed first.
+    Example: pos=6, neg=1 → ranked: 6|1  (positive first)
+    Example: pos=3, neg=4 → ranked: 4|3  (negative first, higher score)
     """
     valid   = [s for s in stocks if s.get("contrib") is not None]
     pos     = [s for s in valid if s["contrib"] >= 0]
@@ -334,6 +335,67 @@ def calc_breadth(stocks):
     neg_pts = round(sum(s["contrib"] for s in neg), 2)
     pos_sc  = breadth_score(pos_cnt)
     neg_sc  = breadth_score(neg_cnt)
+
+    # Ranked display — higher score always first
+    if pos_sc >= neg_sc:
+        first_score  = pos_sc
+        second_score = neg_sc
+        first_label  = "🟢 POSITIVE"
+        second_label = "🔴 NEGATIVE"
+        first_color  = "1B5E20"
+        second_color = "B71C1C"
+        first_bg     = "E8F5E9"
+        second_bg    = "FFEBEE"
+        first_count  = pos_cnt
+        second_count = neg_cnt
+        first_pts    = pos_pts
+        second_pts   = neg_pts
+        dominant     = "POSITIVE"
+    else:
+        first_score  = neg_sc
+        second_score = pos_sc
+        first_label  = "🔴 NEGATIVE"
+        second_label = "🟢 POSITIVE"
+        first_color  = "B71C1C"
+        second_color = "1B5E20"
+        first_bg     = "FFEBEE"
+        second_bg    = "E8F5E9"
+        first_count  = neg_cnt
+        second_count = pos_cnt
+        first_pts    = neg_pts
+        second_pts   = pos_pts
+        dominant     = "NEGATIVE"
+
+    pos_stocks_sorted = sorted(pos, key=lambda x: x["contrib"], reverse=True)
+    neg_stocks_sorted = sorted(neg, key=lambda x: x["contrib"])
+
+    # Build the 7-stock ranked table:
+    # Take first_score stocks from dominant side + second_score stocks from other side
+    if pos_sc >= neg_sc:
+        ranked_stocks = (
+            [{"rank": i+1, "symbol": s["symbol"], "contrib": s["contrib"],
+              "pChng": s["pChng"], "ltp": s["ltp"], "side": "POSITIVE",
+              "color": "1B5E20", "bg": "E8F5E9"}
+             for i, s in enumerate(pos_stocks_sorted[:pos_sc])]
+            +
+            [{"rank": pos_sc+i+1, "symbol": s["symbol"], "contrib": s["contrib"],
+              "pChng": s["pChng"], "ltp": s["ltp"], "side": "NEGATIVE",
+              "color": "B71C1C", "bg": "FFEBEE"}
+             for i, s in enumerate(neg_stocks_sorted[:neg_sc])]
+        )
+    else:
+        ranked_stocks = (
+            [{"rank": i+1, "symbol": s["symbol"], "contrib": s["contrib"],
+              "pChng": s["pChng"], "ltp": s["ltp"], "side": "NEGATIVE",
+              "color": "B71C1C", "bg": "FFEBEE"}
+             for i, s in enumerate(neg_stocks_sorted[:neg_sc])]
+            +
+            [{"rank": neg_sc+i+1, "symbol": s["symbol"], "contrib": s["contrib"],
+              "pChng": s["pChng"], "ltp": s["ltp"], "side": "POSITIVE",
+              "color": "1B5E20", "bg": "E8F5E9"}
+             for i, s in enumerate(pos_stocks_sorted[:pos_sc])]
+        )
+
     return {
         "pos_count":       pos_cnt,
         "neg_count":       neg_cnt,
@@ -343,8 +405,24 @@ def calc_breadth(stocks):
         "neg_score":       neg_sc,
         "total_score":     pos_sc + neg_sc,
         "display":         f"{pos_sc} | {neg_sc}",
-        "pos_stocks":      sorted(pos, key=lambda x: x["contrib"], reverse=True),
-        "neg_stocks":      sorted(neg, key=lambda x: x["contrib"]),
+        "pos_stocks":      pos_stocks_sorted,
+        "neg_stocks":      neg_stocks_sorted,
+        "ranked_stocks":   ranked_stocks,
+        # Ranked fields — higher score first
+        "dominant":        dominant,
+        "first_score":     first_score,
+        "second_score":    second_score,
+        "first_label":     first_label,
+        "second_label":    second_label,
+        "first_color":     first_color,
+        "second_color":    second_color,
+        "first_bg":        first_bg,
+        "second_bg":       second_bg,
+        "first_count":     first_count,
+        "second_count":    second_count,
+        "first_pts":       first_pts,
+        "second_pts":      second_pts,
+        "ranked_display":  f"{first_score} | {second_score}",
     }
 
 # ════════════════════════════════════════════════════════════
@@ -419,7 +497,119 @@ def build_snapshot_excel(label, ist_dt, indices, stocks, breadth):
     c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
     c.border = brd()
 
+    # ── RANKED BREADTH TABLE in Excel ───────────────────────
     r = 8
+    ws.merge_cells(f"A{r}:P{r}")
+    sc(ws.cell(r,1,"📋  BREADTH RANKING TABLE  (Higher Score Listed First)"),
+       bg="37474F", fg="FFFFFF", bold=True, size=11, ha="center")
+    r += 1
+    for h, col in zip(["RANK","SIDE","SCORE","STOCKS","CONTRIB SUM (pts)","FORMULA",
+                        "","","","","","","","","",""], range(1,17)):
+        if h:
+            sc(ws.cell(r,col,h), bg="0D47A1", fg="FFFFFF", bold=True, ha="center")
+
+    # Row 1: First ranked (higher score)
+    r += 1
+    ws.merge_cells(f"A{r}:A{r}")
+    sc(ws.cell(r,1,"1st"), bg=breadth["first_bg"], fg=breadth["first_color"], bold=True, size=14, ha="center")
+    sc(ws.cell(r,2,breadth["first_label"]), bg=breadth["first_bg"], fg=breadth["first_color"], bold=True, ha="center")
+    ws.cell(r,3,breadth["first_score"]).font = font(bold=True, color=breadth["first_color"], size=20)
+    ws.cell(r,3).fill=fill(breadth["first_bg"]); ws.cell(r,3).border=brd(); ws.cell(r,3).alignment=aln("center")
+    ws.cell(r,4,breadth["first_count"]).font = font(bold=True, color=breadth["first_color"], size=12)
+    ws.cell(r,4).fill=fill(breadth["first_bg"]); ws.cell(r,4).border=brd(); ws.cell(r,4).alignment=aln("center")
+    ws.cell(r,5,breadth["first_pts"]).number_format="+#,##0.00;-#,##0.00"
+    ws.cell(r,5).font=font(bold=True, color=breadth["first_color"])
+    ws.cell(r,5).fill=fill(breadth["first_bg"]); ws.cell(r,5).border=brd(); ws.cell(r,5).alignment=aln("center")
+    ws.cell(r,6,f'{breadth["first_count"]}×7÷50={breadth["first_score"]}')
+    ws.cell(r,6).font=font(color="555555"); ws.cell(r,6).fill=fill(breadth["first_bg"])
+    ws.cell(r,6).border=brd(); ws.cell(r,6).alignment=aln("center")
+    ws.row_dimensions[r].height = 24
+
+    # Row 2: Second ranked (lower score)
+    r += 1
+    sc(ws.cell(r,1,"2nd"), bg=breadth["second_bg"], fg=breadth["second_color"], bold=True, size=14, ha="center")
+    sc(ws.cell(r,2,breadth["second_label"]), bg=breadth["second_bg"], fg=breadth["second_color"], bold=True, ha="center")
+    ws.cell(r,3,breadth["second_score"]).font=font(bold=True, color=breadth["second_color"], size=20)
+    ws.cell(r,3).fill=fill(breadth["second_bg"]); ws.cell(r,3).border=brd(); ws.cell(r,3).alignment=aln("center")
+    ws.cell(r,4,breadth["second_count"]).font=font(bold=True, color=breadth["second_color"], size=12)
+    ws.cell(r,4).fill=fill(breadth["second_bg"]); ws.cell(r,4).border=brd(); ws.cell(r,4).alignment=aln("center")
+    ws.cell(r,5,breadth["second_pts"]).number_format="+#,##0.00;-#,##0.00"
+    ws.cell(r,5).font=font(bold=True, color=breadth["second_color"])
+    ws.cell(r,5).fill=fill(breadth["second_bg"]); ws.cell(r,5).border=brd(); ws.cell(r,5).alignment=aln("center")
+    ws.cell(r,6,f'{breadth["second_count"]}×7÷50={breadth["second_score"]}')
+    ws.cell(r,6).font=font(color="555555"); ws.cell(r,6).fill=fill(breadth["second_bg"])
+    ws.cell(r,6).border=brd(); ws.cell(r,6).alignment=aln("center")
+    ws.row_dimensions[r].height = 24
+
+    # Total row
+    r += 1
+    sc(ws.cell(r,1,"TOTAL"), bg="E8EAF6", fg="0D47A1", bold=True, ha="center")
+    sc(ws.cell(r,2,f'Dominant: {breadth["dominant"]}'), bg="E8EAF6", fg="0D47A1", bold=True, ha="center")
+    ws.cell(r,3,breadth["total_score"]).font=font(bold=True, color="0D47A1", size=16)
+    ws.cell(r,3).fill=fill("E8EAF6"); ws.cell(r,3).border=brd(); ws.cell(r,3).alignment=aln("center")
+    ws.cell(r,4,breadth["pos_count"]+breadth["neg_count"]).font=font(bold=True, color="0D47A1")
+    ws.cell(r,4).fill=fill("E8EAF6"); ws.cell(r,4).border=brd(); ws.cell(r,4).alignment=aln("center")
+    total_pts = round(breadth["pos_contrib_sum"]+breadth["neg_contrib_sum"],2)
+    ws.cell(r,5,total_pts).number_format="+#,##0.00;-#,##0.00"
+    ws.cell(r,5).font=font(bold=True, color="0D47A1")
+    ws.cell(r,5).fill=fill("E8EAF6"); ws.cell(r,5).border=brd(); ws.cell(r,5).alignment=aln("center")
+    sc(ws.cell(r,6,f'Ranked: {breadth["ranked_display"]}'), bg="E8EAF6", fg="0D47A1", bold=True, ha="center")
+    ws.row_dimensions[r].height = 20
+
+    r += 2
+
+    # ── 7-STOCK RANKED TABLE in Excel ────────────────────────
+    total_sc = breadth["total_score"]
+    ws.merge_cells(f"A{r}:G{r}")
+    sc(ws.cell(r,1,
+        f"🏆  TOP {total_sc} STOCKS BY BREADTH SCORE  "
+        f"({breadth['first_score']} {breadth['first_label']} + "
+        f"{breadth['second_score']} {breadth['second_label']})"),
+       bg="37474F", fg="FFFFFF", bold=True, size=11, ha="center")
+    r += 1
+    for h, col in zip(["#","SYMBOL","SIDE","LTP (₹)","% CHANGE","CONTRIBUTION (pts)",""], range(1,8)):
+        sc(ws.cell(r,col,h), bg="0D47A1", fg="FFFFFF", bold=True, ha="center")
+    ws.row_dimensions[r].height = 18
+
+    for s in breadth["ranked_stocks"]:
+        r += 1
+        bg = s["bg"]; tc = s["color"]
+        side_lbl = "🟢 POSITIVE" if s["side"]=="POSITIVE" else "🔴 NEGATIVE"
+
+        ws.cell(r,1,s["rank"]).font=font(bold=True,color=tc,size=12)
+        ws.cell(r,1).fill=fill(bg);ws.cell(r,1).border=brd();ws.cell(r,1).alignment=aln("center")
+
+        ws.cell(r,2,s["symbol"]).font=font(bold=True,color=tc,size=13)
+        ws.cell(r,2).fill=fill(bg);ws.cell(r,2).border=brd();ws.cell(r,2).alignment=aln()
+
+        ws.cell(r,3,side_lbl).font=font(bold=True,color=tc,size=10)
+        ws.cell(r,3).fill=fill(bg);ws.cell(r,3).border=brd();ws.cell(r,3).alignment=aln("center")
+
+        ws.cell(r,4,s["ltp"]).number_format="#,##0.00"
+        ws.cell(r,4).font=font(color="333333");ws.cell(r,4).fill=fill(bg)
+        ws.cell(r,4).border=brd();ws.cell(r,4).alignment=aln("center")
+
+        ws.cell(r,5,s["pChng"] and s["pChng"]/100).number_format="+0.00%;-0.00%"
+        ws.cell(r,5).font=font(bold=True,color=tc);ws.cell(r,5).fill=fill(bg)
+        ws.cell(r,5).border=brd();ws.cell(r,5).alignment=aln("center")
+
+        ws.cell(r,6,s["contrib"]).number_format="+#,##0.00;-#,##0.00"
+        ws.cell(r,6).font=font(bold=True,color=tc,size=13);ws.cell(r,6).fill=fill(bg)
+        ws.cell(r,6).border=brd();ws.cell(r,6).alignment=aln("center")
+        ws.row_dimensions[r].height = 22
+
+    # Total contrib row
+    r += 1
+    total_contrib = round(sum(s["contrib"] for s in breadth["ranked_stocks"]),2)
+    ws.merge_cells(f"A{r}:E{r}")
+    sc(ws.cell(r,1,"TOTAL CONTRIBUTION FROM RANKED STOCKS"),
+       bg="E8EAF6", fg="0D47A1", bold=True, ha="right")
+    ws.cell(r,6,total_contrib).number_format="+#,##0.00;-#,##0.00"
+    ws.cell(r,6).font=font(bold=True,color="0D47A1",size=13)
+    ws.cell(r,6).fill=fill("E8EAF6");ws.cell(r,6).border=brd();ws.cell(r,6).alignment=aln("center")
+    ws.row_dimensions[r].height = 20
+
+    r += 2
     ws.merge_cells(f"A{r}:D{r}")
     sc(ws.cell(r,1,"📊  INDEX SUMMARY"), bg=C["hdr_dark"], fg=C["white"], bold=True, size=11, ha="center")
     r += 1
@@ -574,6 +764,86 @@ def send_email(creds, snapshot_path, label, ist_dt, indices, stocks, breadth):
         <div style="font-size:11px;color:#555">Score = {breadth["neg_count"]} × 7 ÷ 50 = {breadth["neg_score"]}</div>
       </div>
     </div>
+  </div>
+
+  <!-- RANKED BREADTH TABLE — higher score always first -->
+  <div style="margin-bottom:16px">
+    <div style="font-size:13px;color:#37474f;font-weight:600;margin-bottom:8px;text-align:center">
+      📋 BREADTH RANKING TABLE &nbsp;·&nbsp; Higher score listed first
+    </div>
+    <table width="100%" cellspacing="0" style="border-collapse:collapse;border-radius:10px;overflow:hidden;border:2px solid #0d47a1">
+      <tr style="background:#0d47a1;color:white">
+        <th style="padding:10px 14px;text-align:center;font-size:13px">RANK</th>
+        <th style="padding:10px 14px;text-align:center;font-size:13px">SIDE</th>
+        <th style="padding:10px 14px;text-align:center;font-size:13px">SCORE</th>
+        <th style="padding:10px 14px;text-align:center;font-size:13px">STOCKS</th>
+        <th style="padding:10px 14px;text-align:center;font-size:13px">CONTRIB SUM (pts)</th>
+        <th style="padding:10px 14px;text-align:center;font-size:13px">FORMULA</th>
+      </tr>
+      <tr style="background:#{breadth["first_bg"]}">
+        <td style="padding:12px 14px;text-align:center;font-size:18px;font-weight:900;color:#{breadth["first_color"]}">1st</td>
+        <td style="padding:12px 14px;text-align:center;font-size:14px;font-weight:bold;color:#{breadth["first_color"]}">{breadth["first_label"]}</td>
+        <td style="padding:12px 14px;text-align:center;font-size:32px;font-weight:900;color:#{breadth["first_color"]}">{breadth["first_score"]}</td>
+        <td style="padding:12px 14px;text-align:center;font-size:16px;font-weight:bold;color:#{breadth["first_color"]}">{breadth["first_count"]}</td>
+        <td style="padding:12px 14px;text-align:center;font-size:14px;font-weight:bold;color:#{breadth["first_color"]}">{breadth["first_pts"]:+.2f}</td>
+        <td style="padding:12px 14px;text-align:center;font-size:12px;color:#555">{breadth["first_count"]}×7÷50={breadth["first_score"]}</td>
+      </tr>
+      <tr style="background:#{breadth["second_bg"]}">
+        <td style="padding:12px 14px;text-align:center;font-size:18px;font-weight:900;color:#{breadth["second_color"]}">2nd</td>
+        <td style="padding:12px 14px;text-align:center;font-size:14px;font-weight:bold;color:#{breadth["second_color"]}">{breadth["second_label"]}</td>
+        <td style="padding:12px 14px;text-align:center;font-size:32px;font-weight:900;color:#{breadth["second_color"]}">{breadth["second_score"]}</td>
+        <td style="padding:12px 14px;text-align:center;font-size:16px;font-weight:bold;color:#{breadth["second_color"]}">{breadth["second_count"]}</td>
+        <td style="padding:12px 14px;text-align:center;font-size:14px;font-weight:bold;color:#{breadth["second_color"]}">{breadth["second_pts"]:+.2f}</td>
+        <td style="padding:12px 14px;text-align:center;font-size:12px;color:#555">{breadth["second_count"]}×7÷50={breadth["second_score"]}</td>
+      </tr>
+      <tr style="background:#e8eaf6">
+        <td colspan="2" style="padding:10px 14px;text-align:center;font-size:13px;font-weight:bold;color:#0d47a1">TOTAL</td>
+        <td style="padding:10px 14px;text-align:center;font-size:24px;font-weight:900;color:#0d47a1">{breadth["total_score"]}</td>
+        <td style="padding:10px 14px;text-align:center;font-size:13px;color:#555">{breadth["pos_count"]+breadth["neg_count"]} stocks</td>
+        <td style="padding:10px 14px;text-align:center;font-size:13px;font-weight:bold;color:#0d47a1">{round(breadth["pos_contrib_sum"]+breadth["neg_contrib_sum"],2):+.2f}</td>
+        <td style="padding:10px 14px;text-align:center;font-size:12px;color:#0d47a1">Always = 7</td>
+      </tr>
+    </table>
+    <div style="text-align:center;margin-top:6px;font-size:12px;color:#666">
+      🏆 Dominant side: <b style="color:#{breadth["first_color"]}">{breadth["dominant"]}</b>
+      &nbsp;·&nbsp; Ranked display: <b>{breadth["ranked_display"]}</b>
+    </div>
+  </div>
+
+  <!-- 7-STOCK RANKED TABLE -->
+  <div style="margin-bottom:16px">
+    <div style="font-size:13px;color:#37474f;font-weight:600;margin-bottom:8px;text-align:center">
+      🏆 TOP {breadth["total_score"]} STOCKS BY BREADTH SCORE
+      &nbsp;·&nbsp;
+      {breadth["first_score"]} {breadth["first_label"]} + {breadth["second_score"]} {breadth["second_label"]}
+    </div>
+    <table width="100%" cellspacing="0" style="border-collapse:collapse;border:2px solid #0d47a1;border-radius:10px;overflow:hidden">
+      <tr style="background:#0d47a1;color:white">
+        <th style="padding:8px 10px;text-align:center">#</th>
+        <th style="padding:8px 10px;text-align:left">SYMBOL</th>
+        <th style="padding:8px 10px;text-align:center">SIDE</th>
+        <th style="padding:8px 10px;text-align:right">LTP (₹)</th>
+        <th style="padding:8px 10px;text-align:right">% CHANGE</th>
+        <th style="padding:8px 10px;text-align:right">CONTRIBUTION (pts)</th>
+      </tr>
+      {"".join(
+        f'<tr style="background:#{s["bg"]}">' +
+        f'<td style="padding:8px 10px;text-align:center;font-weight:bold;color:#{s["color"]}">{s["rank"]}</td>' +
+        f'<td style="padding:8px 10px;font-weight:bold;color:#{s["color"]};font-size:14px">{s["symbol"]}</td>' +
+        f'<td style="padding:8px 10px;text-align:center;font-size:11px;font-weight:600;color:#{s["color"]}">{"🟢 POS" if s["side"]=="POSITIVE" else "🔴 NEG"}</td>' +
+        f'<td style="padding:8px 10px;text-align:right;color:#333">{s["ltp"]:,.2f}</td>' +
+        f'<td style="padding:8px 10px;text-align:right;font-weight:bold;color:#{s["color"]}">{s["pChng"]:+.2f}%</td>' +
+        f'<td style="padding:8px 10px;text-align:right;font-weight:bold;color:#{s["color"]};font-size:14px">{s["contrib"]:+.2f}</td>' +
+        '</tr>'
+        for s in breadth["ranked_stocks"]
+      )}
+      <tr style="background:#e8eaf6">
+        <td colspan="5" style="padding:8px 10px;text-align:right;font-weight:bold;color:#0d47a1">TOTAL CONTRIBUTION</td>
+        <td style="padding:8px 10px;text-align:right;font-weight:bold;color:#0d47a1;font-size:14px">
+          {round(sum(s["contrib"] for s in breadth["ranked_stocks"]),2):+.2f} pts
+        </td>
+      </tr>
+    </table>
   </div>
 
   <h3 style="color:#0d47a1;margin:0 0 8px">Index Performance</h3>
