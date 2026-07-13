@@ -30,7 +30,11 @@ def breadth_score(count):
     return round(count * 7 / 50)
 
 def calc_breadth(stocks):
-    """Calculate breadth score from stock contribution data."""
+    """
+    Breadth score formula: count * 7 / 50 → round to integer.
+    Ranked display: higher score always listed first.
+    ranked_stocks: top N stocks from dominant side + top M from other side = always 7 total.
+    """
     valid   = [s for s in stocks if s.get("contrib") is not None]
     pos     = [s for s in valid if s["contrib"] >= 0]
     neg     = [s for s in valid if s["contrib"] <  0]
@@ -40,17 +44,76 @@ def calc_breadth(stocks):
     neg_pts = round(sum(s["contrib"] for s in neg), 2)
     pos_sc  = breadth_score(pos_cnt)
     neg_sc  = breadth_score(neg_cnt)
-    total   = pos_sc + neg_sc
+
+    pos_stocks_sorted = sorted(pos, key=lambda x: x["contrib"], reverse=True)
+    neg_stocks_sorted = sorted(neg, key=lambda x: x["contrib"])
+
+    # Ranked: higher score first
+    if pos_sc >= neg_sc:
+        dominant      = "POSITIVE"
+        first_score   = pos_sc;   second_score  = neg_sc
+        first_label   = "🟢 POSITIVE"; second_label = "🔴 NEGATIVE"
+        first_color   = "1B5E20";  second_color  = "B71C1C"
+        first_bg      = "E8F5E9";  second_bg     = "FFEBEE"
+        first_count   = pos_cnt;   second_count  = neg_cnt
+        first_pts     = pos_pts;   second_pts    = neg_pts
+        ranked_stocks = (
+            [{"rank":i+1,"symbol":s["symbol"],"contrib":s["contrib"],
+              "pChng":s["pChng"],"ltp":s["ltp"],"side":"POSITIVE",
+              "color":"1B5E20","bg":"E8F5E9"}
+             for i,s in enumerate(pos_stocks_sorted[:pos_sc])]
+            +
+            [{"rank":pos_sc+i+1,"symbol":s["symbol"],"contrib":s["contrib"],
+              "pChng":s["pChng"],"ltp":s["ltp"],"side":"NEGATIVE",
+              "color":"B71C1C","bg":"FFEBEE"}
+             for i,s in enumerate(neg_stocks_sorted[:neg_sc])]
+        )
+    else:
+        dominant      = "NEGATIVE"
+        first_score   = neg_sc;   second_score  = pos_sc
+        first_label   = "🔴 NEGATIVE"; second_label = "🟢 POSITIVE"
+        first_color   = "B71C1C";  second_color  = "1B5E20"
+        first_bg      = "FFEBEE";  second_bg     = "E8F5E9"
+        first_count   = neg_cnt;   second_count  = pos_cnt
+        first_pts     = neg_pts;   second_pts    = pos_pts
+        ranked_stocks = (
+            [{"rank":i+1,"symbol":s["symbol"],"contrib":s["contrib"],
+              "pChng":s["pChng"],"ltp":s["ltp"],"side":"NEGATIVE",
+              "color":"B71C1C","bg":"FFEBEE"}
+             for i,s in enumerate(neg_stocks_sorted[:neg_sc])]
+            +
+            [{"rank":neg_sc+i+1,"symbol":s["symbol"],"contrib":s["contrib"],
+              "pChng":s["pChng"],"ltp":s["ltp"],"side":"POSITIVE",
+              "color":"1B5E20","bg":"E8F5E9"}
+             for i,s in enumerate(pos_stocks_sorted[:pos_sc])]
+        )
+
     return {
-        "pos_count": pos_cnt,
-        "neg_count": neg_cnt,
+        "pos_count":       pos_cnt,
+        "neg_count":       neg_cnt,
         "pos_contrib_sum": pos_pts,
         "neg_contrib_sum": neg_pts,
-        "pos_score":  pos_sc,
-        "neg_score":  neg_sc,
-        "total_score": total,
-        "pos_stocks": sorted(pos, key=lambda x: x["contrib"], reverse=True),
-        "neg_stocks": sorted(neg, key=lambda x: x["contrib"]),
+        "pos_score":       pos_sc,
+        "neg_score":       neg_sc,
+        "total_score":     pos_sc + neg_sc,
+        "display":         f"{pos_sc} | {neg_sc}",
+        "pos_stocks":      pos_stocks_sorted,
+        "neg_stocks":      neg_stocks_sorted,
+        "ranked_stocks":   ranked_stocks,
+        "dominant":        dominant,
+        "first_score":     first_score,
+        "second_score":    second_score,
+        "first_label":     first_label,
+        "second_label":    second_label,
+        "first_color":     first_color,
+        "second_color":    second_color,
+        "first_bg":        first_bg,
+        "second_bg":       second_bg,
+        "first_count":     first_count,
+        "second_count":    second_count,
+        "first_pts":       first_pts,
+        "second_pts":      second_pts,
+        "ranked_display":  f"{first_score} | {second_score}",
     }
 
 # ════════════════════════════════════════════════════════════
@@ -243,6 +306,20 @@ NIFTY50_LIST = {
     "ETERNAL":0.95,
 }
 
+# ════════════════════════════════════════════════════════════
+# SPECIAL WATCHLIST — Always tracked separately
+# ════════════════════════════════════════════════════════════
+SPECIAL_WATCHLIST = [
+    "RELIANCE", "MARUTI", "HDFCBANK", "BHARTIARTL", "INFY",
+    "TCS", "HINDUNILVR", "SUNPHARMA", "M&M", "ICICIBANK", "SBIN"
+]
+
+def get_special_stocks(stocks):
+    """Extract special watchlist stocks from full stocks list."""
+    stock_map = {s["symbol"]: s for s in stocks}
+    return [stock_map[sym] for sym in SPECIAL_WATCHLIST if sym in stock_map]
+
+
 def fetch_one_stock(obj, sym, wt, info, nifty_ltp):
     """Fetch a single stock — called in parallel."""
     if not info:
@@ -315,120 +392,7 @@ def fetch_nifty50(obj, nifty_ltp, token_map):
 # Formula: count * 7 / 50 → round to integer
 # Positive score + Negative score always = 7
 # ════════════════════════════════════════════════════════════
-def breadth_score(count):
-    return round(count * 7 / 50)
-
-def calc_breadth(stocks):
-    """
-    Separates stocks into positive and negative by contribution pts.
-    Applies breadth score formula: count * 7 / 50 → rounded integer.
-    Ranked display: higher score always listed first.
-    Example: pos=6, neg=1 → ranked: 6|1  (positive first)
-    Example: pos=3, neg=4 → ranked: 4|3  (negative first, higher score)
-    """
-    valid   = [s for s in stocks if s.get("contrib") is not None]
-    pos     = [s for s in valid if s["contrib"] >= 0]
-    neg     = [s for s in valid if s["contrib"] <  0]
-    pos_cnt = len(pos)
-    neg_cnt = len(neg)
-    pos_pts = round(sum(s["contrib"] for s in pos), 2)
-    neg_pts = round(sum(s["contrib"] for s in neg), 2)
-    pos_sc  = breadth_score(pos_cnt)
-    neg_sc  = breadth_score(neg_cnt)
-
-    # Ranked display — higher score always first
-    if pos_sc >= neg_sc:
-        first_score  = pos_sc
-        second_score = neg_sc
-        first_label  = "🟢 POSITIVE"
-        second_label = "🔴 NEGATIVE"
-        first_color  = "1B5E20"
-        second_color = "B71C1C"
-        first_bg     = "E8F5E9"
-        second_bg    = "FFEBEE"
-        first_count  = pos_cnt
-        second_count = neg_cnt
-        first_pts    = pos_pts
-        second_pts   = neg_pts
-        dominant     = "POSITIVE"
-    else:
-        first_score  = neg_sc
-        second_score = pos_sc
-        first_label  = "🔴 NEGATIVE"
-        second_label = "🟢 POSITIVE"
-        first_color  = "B71C1C"
-        second_color = "1B5E20"
-        first_bg     = "FFEBEE"
-        second_bg    = "E8F5E9"
-        first_count  = neg_cnt
-        second_count = pos_cnt
-        first_pts    = neg_pts
-        second_pts   = pos_pts
-        dominant     = "NEGATIVE"
-
-    pos_stocks_sorted = sorted(pos, key=lambda x: x["contrib"], reverse=True)
-    neg_stocks_sorted = sorted(neg, key=lambda x: x["contrib"])
-
-    # Build the 7-stock ranked table:
-    # Take first_score stocks from dominant side + second_score stocks from other side
-    if pos_sc >= neg_sc:
-        ranked_stocks = (
-            [{"rank": i+1, "symbol": s["symbol"], "contrib": s["contrib"],
-              "pChng": s["pChng"], "ltp": s["ltp"], "side": "POSITIVE",
-              "color": "1B5E20", "bg": "E8F5E9"}
-             for i, s in enumerate(pos_stocks_sorted[:pos_sc])]
-            +
-            [{"rank": pos_sc+i+1, "symbol": s["symbol"], "contrib": s["contrib"],
-              "pChng": s["pChng"], "ltp": s["ltp"], "side": "NEGATIVE",
-              "color": "B71C1C", "bg": "FFEBEE"}
-             for i, s in enumerate(neg_stocks_sorted[:neg_sc])]
-        )
-    else:
-        ranked_stocks = (
-            [{"rank": i+1, "symbol": s["symbol"], "contrib": s["contrib"],
-              "pChng": s["pChng"], "ltp": s["ltp"], "side": "NEGATIVE",
-              "color": "B71C1C", "bg": "FFEBEE"}
-             for i, s in enumerate(neg_stocks_sorted[:neg_sc])]
-            +
-            [{"rank": neg_sc+i+1, "symbol": s["symbol"], "contrib": s["contrib"],
-              "pChng": s["pChng"], "ltp": s["ltp"], "side": "POSITIVE",
-              "color": "1B5E20", "bg": "E8F5E9"}
-             for i, s in enumerate(pos_stocks_sorted[:pos_sc])]
-        )
-
-    return {
-        "pos_count":       pos_cnt,
-        "neg_count":       neg_cnt,
-        "pos_contrib_sum": pos_pts,
-        "neg_contrib_sum": neg_pts,
-        "pos_score":       pos_sc,
-        "neg_score":       neg_sc,
-        "total_score":     pos_sc + neg_sc,
-        "display":         f"{pos_sc} | {neg_sc}",
-        "pos_stocks":      pos_stocks_sorted,
-        "neg_stocks":      neg_stocks_sorted,
-        "ranked_stocks":   ranked_stocks,
-        # Ranked fields — higher score first
-        "dominant":        dominant,
-        "first_score":     first_score,
-        "second_score":    second_score,
-        "first_label":     first_label,
-        "second_label":    second_label,
-        "first_color":     first_color,
-        "second_color":    second_color,
-        "first_bg":        first_bg,
-        "second_bg":       second_bg,
-        "first_count":     first_count,
-        "second_count":    second_count,
-        "first_pts":       first_pts,
-        "second_pts":      second_pts,
-        "ranked_display":  f"{first_score} | {second_score}",
-    }
-
-# ════════════════════════════════════════════════════════════
-# BUILD SNAPSHOT EXCEL (File 1)
-# ════════════════════════════════════════════════════════════
-def build_snapshot_excel(label, ist_dt, indices, stocks, breadth):
+def build_snapshot_excel(label, ist_dt, indices, stocks, breadth, special_stocks):
     wb = Workbook(); ws = wb.active
     ws.title = "Snapshot_" + label
     disp = label[:2]+":"+label[2:] if len(label)==4 else label
@@ -610,6 +574,35 @@ def build_snapshot_excel(label, ist_dt, indices, stocks, breadth):
     ws.row_dimensions[r].height = 20
 
     r += 2
+    # ── SPECIAL WATCHLIST TABLE in Excel ─────────────────────
+    ws.merge_cells(f"A{r}:G{r}")
+    sc(ws.cell(r,1,"⭐  SPECIAL WATCHLIST"), bg="283593", fg="FFFFFF", bold=True, size=11, ha="center")
+    r += 1
+    for h, col in zip(["SYMBOL","LTP (₹)","CHANGE (₹)","% CHANGE","WEIGHT (pts)","CONTRIB (pts)",""], range(1,8)):
+        sc(ws.cell(r,col,h), bg="3949AB", fg="FFFFFF", bold=True, ha="center")
+    for s in special_stocks:
+        if s.get("ltp") is None:
+            continue
+        r += 1
+        pos = (s.get("pChng") or 0) >= 0
+        bg  = C["pos_bg"] if pos else C["neg_bg"]
+        tc  = C["pos_txt"] if pos else C["neg_txt"]
+        ws.cell(r,1,s["symbol"]).font=font(bold=True,color=tc)
+        ws.cell(r,1).fill=fill(bg);ws.cell(r,1).border=brd();ws.cell(r,1).alignment=aln()
+        for col,val,fmt in [
+            (2,s["ltp"],"#,##0.00"),
+            (3,s["chng"],"+#,##0.00;-#,##0.00"),
+            (4,s["pChng"] and s["pChng"]/100,"+0.00%;-0.00%"),
+            (5,s.get("weight_pts"),"#,##0.00"),
+            (6,s.get("contrib"),"+#,##0.00;-#,##0.00"),
+        ]:
+            cell=ws.cell(r,col);cell.value=val
+            if val is not None and fmt: cell.number_format=fmt
+            cell.font=font(bold=(col in(3,4,6)),color=tc if col in(3,4,6) else "000000")
+            cell.fill=fill(bg);cell.border=brd();cell.alignment=aln("center")
+        ws.row_dimensions[r].height=18
+
+    r += 2
     ws.merge_cells(f"A{r}:D{r}")
     sc(ws.cell(r,1,"📊  INDEX SUMMARY"), bg=C["hdr_dark"], fg=C["white"], bold=True, size=11, ha="center")
     r += 1
@@ -694,7 +687,7 @@ def build_snapshot_excel(label, ist_dt, indices, stocks, breadth):
 # ════════════════════════════════════════════════════════════
 # EMAIL
 # ════════════════════════════════════════════════════════════
-def send_email(creds, snapshot_path, label, ist_dt, indices, stocks, breadth):
+def send_email(creds, snapshot_path, label, ist_dt, indices, stocks, breadth, special_stocks):
     disp    = label[:2]+":"+label[2:] if len(label)==4 else label
     subject = f"📊 NSE Snapshot {disp} IST — {ist_dt.strftime('%d %b %Y')}"
 
@@ -846,6 +839,28 @@ def send_email(creds, snapshot_path, label, ist_dt, indices, stocks, breadth):
     </table>
   </div>
 
+  <!-- SPECIAL WATCHLIST TABLE -->
+  <h3 style="color:#0d47a1;margin:0 0 8px">⭐ Special Watchlist</h3>
+  <table width="100%" cellspacing="0" style="border-collapse:collapse;border:1px solid #e0e0e0;margin-bottom:16px">
+    <tr style="background:#283593;color:white">
+      <th style="padding:7px 10px;text-align:left">SYMBOL</th>
+      <th style="padding:7px 10px;text-align:right">LTP (₹)</th>
+      <th style="padding:7px 10px;text-align:right">CHANGE (₹)</th>
+      <th style="padding:7px 10px;text-align:right">% CHANGE</th>
+      <th style="padding:7px 10px;text-align:right">CONTRIB (pts)</th>
+    </tr>
+    {"".join(
+      f'<tr style="background:{"#e8f5e9" if (s.get("pChng") or 0)>=0 else "#ffebee"}">' +
+      f'<td style="padding:7px 10px;font-weight:bold;color:{"#1b5e20" if (s.get("pChng") or 0)>=0 else "#b71c1c"}">{s["symbol"]}</td>' +
+      f'<td style="padding:7px 10px;text-align:right">₹{s["ltp"]:,.2f}</td>' +
+      f'<td style="padding:7px 10px;text-align:right;color:{"#1b5e20" if (s.get("chng") or 0)>=0 else "#b71c1c"};font-weight:bold">{s["chng"]:+.2f}</td>' +
+      f'<td style="padding:7px 10px;text-align:right;color:{"#1b5e20" if (s.get("pChng") or 0)>=0 else "#b71c1c"};font-weight:bold">{s["pChng"]:+.2f}%</td>' +
+      f'<td style="padding:7px 10px;text-align:right;color:{"#1b5e20" if (s.get("contrib") or 0)>=0 else "#b71c1c"};font-weight:bold">{s["contrib"]:+.2f} pts</td>' +
+      '</tr>'
+      for s in special_stocks if s.get("ltp") is not None
+    )}
+  </table>
+
   <h3 style="color:#0d47a1;margin:0 0 8px">Index Performance</h3>
   <table width="100%" cellspacing="0" style="border-collapse:collapse;border:1px solid #e0e0e0">
     <tr style="background:#1976d2;color:white">
@@ -914,7 +929,7 @@ def upload_drive(creds, xlsx_path):
 # ════════════════════════════════════════════════════════════
 # GOOGLE SHEETS
 # ════════════════════════════════════════════════════════════
-def update_sheets(creds, label, ist_dt, indices, stocks, breadth):
+def update_sheets(creds, label, ist_dt, indices, stocks, breadth, special_stocks):
     try:
         gc  = gspread.authorize(get_sa_creds(
             creds["sa_json"],["https://www.googleapis.com/auth/spreadsheets"]))
@@ -924,63 +939,184 @@ def update_sheets(creds, label, ist_dt, indices, stocks, breadth):
         tab1 = "Snapshot_" + label
         try: sh.del_worksheet(sh.worksheet(tab1))
         except: pass
-        ws1 = sh.add_worksheet(title=tab1, rows=120, cols=20)
+        ws1 = sh.add_worksheet(title=tab1, rows=200, cols=20)
 
-        rows1 = [
-            [f"NSE Snapshot — {disp} IST"]+[""]*19,
-            [f"Captured: {ist_dt.strftime('%d-%b-%Y %H:%M:%S IST')}"]+[""]*19,
-            [""]*20,
-            ["BREADTH SCORE","POSITIVE","NEGATIVE","TOTAL",""]+[""]*15,
-            [f"Score",breadth["pos_score"],breadth["neg_score"],breadth["total_score"],"",
-             f"Stocks",breadth["pos_count"],breadth["neg_count"],breadth["pos_count"]+breadth["neg_count"],"",
-             f"Contrib pts",breadth["pos_contrib_sum"],breadth["neg_contrib_sum"],
-             round(breadth["pos_contrib_sum"]+breadth["neg_contrib_sum"],2)]+[""]*5,
-            [""]*20,
-            ["INDEX","LTP","CHG","% CHG",""]+[""]*15,
-        ]
+        rows1 = []
+
+        # ── Row 1-2: Title ────────────────────────────────────
+        rows1.append([f"NSE Market Snapshot — {disp} IST"] + [""]*19)
+        rows1.append([f"Captured: {ist_dt.strftime('%d-%b-%Y %H:%M:%S IST')}"] + [""]*19)
+        rows1.append([""]*20)
+
+        # ── Row 4: Breadth Score Summary ─────────────────────
+        rows1.append([
+            "📊 BREADTH SCORE",
+            f"🟢 POSITIVE: {breadth['pos_score']}",
+            f"({breadth['pos_count']} stocks)",
+            f"{breadth['pos_contrib_sum']:+.2f} pts",
+            "|",
+            f"🔴 NEGATIVE: {breadth['neg_score']}",
+            f"({breadth['neg_count']} stocks)",
+            f"{breadth['neg_contrib_sum']:+.2f} pts",
+            "=",
+            f"TOTAL: {breadth['total_score']}",
+            "always 7",
+            "", "", "", "", "", "", "", "", ""
+        ])
+        rows1.append([""]*20)
+
+        # ── Row 6: Ranked Breadth Table Header ───────────────
+        rows1.append([
+            "RANK", "SIDE", "SCORE", "STOCKS COUNT",
+            "CONTRIB SUM (pts)", "FORMULA", "", "", "", "",
+            "", "", "", "", "", "", "", "", "", ""
+        ])
+
+        # First ranked row (dominant)
+        rows1.append([
+            "1st",
+            breadth["first_label"],
+            breadth["first_score"],
+            breadth["first_count"],
+            f"{breadth['first_pts']:+.2f}",
+            f"{breadth['first_count']}x7/50={breadth['first_score']}",
+            "", "", "", "", "", "", "", "", "", "", "", "", "", ""
+        ])
+
+        # Second ranked row
+        rows1.append([
+            "2nd",
+            breadth["second_label"],
+            breadth["second_score"],
+            breadth["second_count"],
+            f"{breadth['second_pts']:+.2f}",
+            f"{breadth['second_count']}x7/50={breadth['second_score']}",
+            "", "", "", "", "", "", "", "", "", "", "", "", "", ""
+        ])
+
+        # Total row
+        total_contrib = round(breadth["pos_contrib_sum"] + breadth["neg_contrib_sum"], 2)
+        rows1.append([
+            "TOTAL",
+            f"Dominant: {breadth['dominant']}",
+            breadth["total_score"],
+            breadth["pos_count"] + breadth["neg_count"],
+            f"{total_contrib:+.2f}",
+            f"Ranked: {breadth['ranked_display']}",
+            "", "", "", "", "", "", "", "", "", "", "", "", "", ""
+        ])
+        rows1.append([""]*20)
+
+        # ── 7-Stock Ranked Table Header ───────────────────────
+        rows1.append([
+            f"🏆 TOP {breadth['total_score']} STOCKS BY BREADTH SCORE",
+            f"{breadth['first_score']} {breadth['first_label']} + {breadth['second_score']} {breadth['second_label']}",
+            "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""
+        ])
+        rows1.append([
+            "#", "SYMBOL", "SIDE", "LTP (₹)",
+            "% CHANGE", "CONTRIBUTION (pts)", "",
+            "", "", "", "", "", "", "", "", "", "", "", "", ""
+        ])
+
+        # 7 ranked stocks
+        for s in breadth["ranked_stocks"]:
+            side_lbl = "🟢 POSITIVE" if s["side"] == "POSITIVE" else "🔴 NEGATIVE"
+            rows1.append([
+                s["rank"],
+                s["symbol"],
+                side_lbl,
+                s["ltp"],
+                f"{s['pChng']:+.2f}%",
+                f"{s['contrib']:+.2f}",
+                "", "", "", "", "", "", "", "", "", "", "", "", "", ""
+            ])
+
+        # Total contrib of ranked stocks
+        ranked_total = round(sum(s["contrib"] for s in breadth["ranked_stocks"]), 2)
+        rows1.append([
+            "TOTAL", "", "", "",
+            "Total Contribution:",
+            f"{ranked_total:+.2f} pts",
+            "", "", "", "", "", "", "", "", "", "", "", "", "", ""
+        ])
+        rows1.append([""]*20)
+
+        # ── Special Watchlist ─────────────────────────────────
+        rows1.append(["⭐ SPECIAL WATCHLIST"] + [""]*19)
+        rows1.append(["SYMBOL","LTP","CHANGE","% CHANGE","WEIGHT(pts)","CONTRIB(pts)"] + [""]*14)
+        for s in special_stocks:
+            if s.get("ltp") is None:
+                continue
+            rows1.append([
+                s["symbol"],
+                s["ltp"],
+                f'{s["chng"]:+.2f}' if s["chng"] is not None else "",
+                f'{s["pChng"]:+.2f}%' if s["pChng"] is not None else "",
+                f'{s["weight_pts"]:.2f}' if s.get("weight_pts") is not None else "",
+                f'{s["contrib"]:+.2f}' if s.get("contrib") is not None else "",
+            ] + [""]*14)
+        rows1.append([""]*20)
+
+        # ── Index Summary ─────────────────────────────────────
+        rows1.append(["📊 INDEX SUMMARY", "LTP", "CHANGE", "% CHANGE"] + [""]*16)
         for name in ["NIFTY 50","SENSEX","BANK NIFTY","NIFTY IT","NIFTY SMALLCAP 50"]:
             d=indices.get(name,{}); p=d.get("pct")
-            rows1.append([name,d.get("ltp","N/A"),d.get("chng","N/A"),
-                          f"{p:+.2f}%" if p is not None else "N/A",""]+[""]*15)
+            rows1.append([
+                name,
+                d.get("ltp","N/A"),
+                d.get("chng","N/A"),
+                f"{p:+.2f}%" if p is not None else "N/A"
+            ] + [""]*16)
         rows1.append([""]*20)
-        rows1.append(["#","SYMBOL","LTP","CHG","% CHG","WT(pts)","CONTRIB","",
-                      "TOP POSITIVE","LTP","CHG","% CHG","CONTRIB","",
-                      "TOP NEGATIVE","LTP","CHG","% CHG","CONTRIB"])
+
+        # ── All 50 Stocks ─────────────────────────────────────
+        rows1.append([
+            "#","SYMBOL","LTP","CHG","% CHG","WT(pts)","CONTRIB","",
+            "TOP POSITIVE","LTP","CHG","% CHG","CONTRIB","",
+            "TOP NEGATIVE","LTP","CHG","% CHG","CONTRIB",""
+        ])
 
         top7p = breadth["pos_stocks"][:7]
         top7n = breadth["neg_stocks"][:7]
-        all_stocks = list(enumerate(stocks))
-        for i, s in all_stocks:
-            p=s["pChng"]
-            row=[i+1,s["symbol"],s.get("ltp",""),
-                 f'{s["chng"]:+.2f}' if s["chng"] is not None else "",
-                 f'{p:+.2f}%' if p is not None else "",
-                 f'{s["weight_pts"]:.2f}' if s.get("weight_pts") is not None else "",
-                 f'{s["contrib"]:+.2f}' if s.get("contrib") is not None else "",""]
-            row+=([top7p[i]["symbol"],top7p[i]["ltp"],
-                   f'{top7p[i]["chng"]:+.2f}',f'{top7p[i]["pChng"]:+.2f}%',
-                   f'{top7p[i]["contrib"]:+.2f}',""] if i<len(top7p) else [""]*6)
-            row+=([top7n[i]["symbol"],top7n[i]["ltp"],
-                   f'{top7n[i]["chng"]:+.2f}',f'{top7n[i]["pChng"]:+.2f}%',
-                   f'{top7n[i]["contrib"]:+.2f}'] if i<len(top7n) else [""]*5)
+
+        for i, s in enumerate(stocks):
+            p = s["pChng"]
+            row = [
+                i+1, s["symbol"], s.get("ltp",""),
+                f'{s["chng"]:+.2f}' if s["chng"] is not None else "",
+                f'{p:+.2f}%' if p is not None else "",
+                f'{s["weight_pts"]:.2f}' if s.get("weight_pts") is not None else "",
+                f'{s["contrib"]:+.2f}' if s.get("contrib") is not None else "",
+                ""
+            ]
+            row += ([
+                top7p[i]["symbol"], top7p[i]["ltp"],
+                f'{top7p[i]["chng"]:+.2f}', f'{top7p[i]["pChng"]:+.2f}%',
+                f'{top7p[i]["contrib"]:+.2f}', ""
+            ] if i < len(top7p) else [""]*6)
+            row += ([
+                top7n[i]["symbol"], top7n[i]["ltp"],
+                f'{top7n[i]["chng"]:+.2f}', f'{top7n[i]["pChng"]:+.2f}%',
+                f'{top7n[i]["contrib"]:+.2f}'
+            ] if i < len(top7n) else [""]*5)
             rows1.append(row)
+
         ws1.update("A1", rows1)
-        print(f"✅ Sheets updated: {tab1}")
+        print(f"✅ Google Sheets updated: {tab1}")
+
     except Exception as e:
         print(f"⚠️  Sheets failed: {e}")
         traceback.print_exc()
 
 
-# ════════════════════════════════════════════════════════════
-# MAIN
-# ════════════════════════════════════════════════════════════
 def main():
     ist_dt    = datetime.now(IST)
     label     = env("MANUAL_LABEL") or ist_dt.strftime("%H%M")
     disp      = label[:2]+":"+label[2:] if len(label)==4 else label
 
     print(f"\n{'='*60}")
-    print(f"  NSE Snapshot + Levels — {disp} IST | {ist_dt.strftime('%d-%b-%Y')}")
+    print(f"  NSE Snapshot — {disp} IST | {ist_dt.strftime('%d-%b-%Y')}")
     print(f"{'='*60}")
 
     creds      = get_creds()
@@ -988,44 +1124,41 @@ def main():
     token_map  = load_token_map()
     indices    = fetch_indices(obj)
 
-    nifty_ltp   = indices.get("NIFTY 50",{}).get("ltp")   or 0
-    prev_close  = indices.get("NIFTY 50",{}).get("close") or 0
+    nifty_ltp  = indices.get("NIFTY 50",{}).get("ltp")   or 0
+    prev_close = indices.get("NIFTY 50",{}).get("close") or 0
     print(f"\n  Nifty LTP: {nifty_ltp}  |  Prev Close: {prev_close}")
 
     stocks = fetch_nifty50(obj, nifty_ltp, token_map)
 
-    # Calculate breadth score
     print("\n📊 Calculating breadth score...")
     breadth = calc_breadth(stocks)
-    print(f"  Positive stocks : {breadth['pos_count']}  →  score {breadth['pos_score']}")
-    print(f"  Negative stocks : {breadth['neg_count']}  →  score {breadth['neg_score']}")
-    print(f"  Total score     : {breadth['total_score']} (always 7)")
-    print(f"  +ve contrib sum : {breadth['pos_contrib_sum']:+.2f} pts")
-    print(f"  -ve contrib sum : {breadth['neg_contrib_sum']:+.2f} pts")
+    special_stocks = get_special_stocks(stocks)
+    print(f"  ✅ Special watchlist: {len(special_stocks)} stocks loaded")
+    print(f"  Positive: {breadth['pos_count']} stocks → score {breadth['pos_score']}")
+    print(f"  Negative: {breadth['neg_count']} stocks → score {breadth['neg_score']}")
+    print(f"  Dominant: {breadth['dominant']}  |  Ranked: {breadth['ranked_display']}")
+    print(f"  Total score: {breadth['total_score']} (always 7)")
 
     os.makedirs("output", exist_ok=True)
     date_str = ist_dt.strftime("%Y-%m-%d")
 
-    # Build Excel 1 — Snapshot
-    print("\n📁 Building Snapshot Excel...")
-    wb1 = build_snapshot_excel(label, ist_dt, indices, stocks, breadth)
+    print("\n📁 Building Excel...")
+    wb1 = build_snapshot_excel(label, ist_dt, indices, stocks, breadth, special_stocks)
     snap_path = f"output/NSE_{date_str}_{label}.xlsx"
     wb1.save(snap_path)
     print(f"  ✅ {snap_path}")
 
-    # Send email
     print("\n📧 Sending email...")
-    send_email(creds, snap_path, label, ist_dt, indices, stocks, breadth)
+    send_email(creds, snap_path, label, ist_dt, indices, stocks, breadth, special_stocks)
 
-    # Upload to Drive
     print("\n☁️  Uploading to Drive...")
     upload_drive(creds, snap_path)
 
-    # Update Sheets
-    print("\n📊 Updating Google Sheets...")
-    update_sheets(creds, label, ist_dt, indices, stocks, breadth)
+    print("\n📊 Updating Sheets...")
+    update_sheets(creds, label, ist_dt, indices, stocks, breadth, special_stocks)
 
     print(f"\n✅ ALL DONE — {disp} IST\n")
+
 
 if __name__ == "__main__":
     try:
