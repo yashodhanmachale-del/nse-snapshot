@@ -207,7 +207,7 @@ FALLBACK_TOKENS = {
     "POWERGRID":{"token":"14977","tradingsymbol":"POWERGRID-EQ"},
     "TATASTEEL":{"token":"3499","tradingsymbol":"TATASTEEL-EQ"},
     "TECHM":{"token":"13538","tradingsymbol":"TECHM-EQ"},
-    "WIPRO":{"token":"3787","tradingsymbol":"WIPRO-EQ"},
+    "BSE":{"token":"543320","tradingsymbol":"BSE-EQ"},
     "ADANIPORTS":{"token":"15083","tradingsymbol":"ADANIPORTS-EQ"},
     "COALINDIA":{"token":"20374","tradingsymbol":"COALINDIA-EQ"},
     "JSWSTEEL":{"token":"11723","tradingsymbol":"JSWSTEEL-EQ"},
@@ -298,7 +298,7 @@ NIFTY50_LIST = {
     "SBIN":2.75,"HINDUNILVR":2.30,"BAJFINANCE":2.05,"M&M":1.95,"MARUTI":1.55,
     "SUNPHARMA":1.50,"ULTRACEMCO":1.35,"HCLTECH":1.30,"TITAN":1.25,"BAJAJFINSV":1.20,
     "ASIANPAINT":1.15,"ADANIENT":1.10,"NTPC":1.10,"ONGC":1.05,"POWERGRID":1.05,
-    "TATASTEEL":1.00,"TECHM":0.95,"WIPRO":0.90,"ADANIPORTS":0.90,"COALINDIA":0.85,
+    "TATASTEEL":1.00,"TECHM":0.95,"BSE":1.24,"ADANIPORTS":0.90,"COALINDIA":0.85,
     "JSWSTEEL":0.80,"BAJAJ-AUTO":0.80,"GRASIM":0.70,"DRREDDY":0.65,"CIPLA":0.65,
     "EICHERMOT":0.65,"INDUSINDBK":0.60,"APOLLOHOSP":0.55,"TATACONSUM":0.55,
     "BEL":0.50,"SHRIRAMFIN":0.45,"HINDALCO":0.75,"HDFCLIFE":0.90,"INDIGO":0.70,
@@ -930,6 +930,22 @@ def upload_drive(creds, xlsx_path):
 # GOOGLE SHEETS
 # ════════════════════════════════════════════════════════════
 def update_sheets(creds, label, ist_dt, indices, stocks, breadth, special_stocks):
+    """Wrapper with retry logic for Google Sheets rate limits."""
+    for attempt in range(3):
+        try:
+            if attempt > 0:
+                wait = attempt * 45  # 45s, 90s between retries
+                print(f"  ⏳ Sheets retry {attempt+1}/3 — waiting {wait}s for rate limit...")
+                time.sleep(wait)
+            _do_update_sheets(creds, label, ist_dt, indices, stocks, breadth, special_stocks)
+            return
+        except Exception as e:
+            print(f"  ⚠️  Sheets attempt {attempt+1} failed: {e}")
+            if attempt == 2:
+                print("  ❌ All Sheets retries exhausted — data in email/Drive only")
+                traceback.print_exc()
+
+def _do_update_sheets(creds, label, ist_dt, indices, stocks, breadth, special_stocks):
     try:
         gc  = gspread.authorize(get_sa_creds(
             creds["sa_json"],["https://www.googleapis.com/auth/spreadsheets"]))
@@ -939,6 +955,7 @@ def update_sheets(creds, label, ist_dt, indices, stocks, breadth, special_stocks
         tab1 = "Snapshot_" + label
         try: sh.del_worksheet(sh.worksheet(tab1))
         except: pass
+        time.sleep(2)
         ws1 = sh.add_worksheet(title=tab1, rows=200, cols=20)
 
         rows1 = []
@@ -1154,7 +1171,15 @@ def main():
     print("\n☁️  Uploading to Drive...")
     upload_drive(creds, snap_path)
 
-    print("\n📊 Updating Sheets...")
+    print("\n📊 Updating Sheets (with rate-limit buffer)...")
+    # Longer buffer for early morning runs (9:15-9:45) which are close together
+    ist_hour = ist_dt.hour
+    ist_min  = ist_dt.minute
+    if ist_hour == 9 and ist_min in [20, 30, 45]:
+        print(f"  ⏳ Early morning run — waiting 15s to avoid Sheets rate limit...")
+        time.sleep(15)
+    else:
+        time.sleep(5)
     update_sheets(creds, label, ist_dt, indices, stocks, breadth, special_stocks)
 
     print(f"\n✅ ALL DONE — {disp} IST\n")
